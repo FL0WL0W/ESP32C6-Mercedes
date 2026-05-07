@@ -1,0 +1,7 @@
+build/*
+libs/*
+.vscode/*
+.devcontainer/*
+debug.log
+.cmake/*
+__pycache__/*
