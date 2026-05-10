@@ -64,6 +64,8 @@ using namespace EFIGenie;
 
 ICommunicationService *_uartCommServices[UART_NUM_MAX] = {nullptr};
 
+extern void RegisterCANTasks();
+
 //read UPDI byte
 extern "C" bool UPDI_Read(uint8_t *val)
 {
@@ -417,7 +419,7 @@ extern "C"
         ESP_ERROR_CHECK(uart_driver_install(UART_NUM_0, 256, 256, 10, &uart0_queue, 0));
 
         uart_config_t uart_config = {
-            .baud_rate = 2000000,
+            .baud_rate = 1000000,
             .data_bits = UART_DATA_8_BITS,
             .parity = UART_PARITY_DISABLE,
             .stop_bits = UART_STOP_BITS_1,
@@ -513,7 +515,7 @@ extern "C"
                 .enabled = true,
                 .t_config = TWAI_TIMING_CONFIG_500KBITS(),
                 .f_config = TWAI_FILTER_CONFIG_ACCEPT_ALL(),
-                .g_config = TWAI_GENERAL_CONFIG_DEFAULT_V2(1, (gpio_num_t)3, (gpio_num_t)2, TWAI_MODE_NORMAL)
+                .g_config = TWAI_GENERAL_CONFIG_DEFAULT_V2(1, (gpio_num_t)2, (gpio_num_t)3, TWAI_MODE_NORMAL)
             }
         };
         _embeddedIOServiceCollection.CANService = new Esp32IdfCANService(canconfigs);
@@ -561,16 +563,18 @@ extern "C"
 
         httpd_register_uri_handler(server, &resetToOTAUpdaterPost);
 
-        // xTaskCreate(wdthitter, "wdthitter", 4096, NULL, 1, &wdthitter_task_handle);
+        xTaskCreate(wdthitter, "wdthitter", 4096, NULL, 1, &wdthitter_task_handle);
         mount_mmrofs("/mm");
         // mount_spiffs("/mm");
         register_file_handler_http_server("/mm");
         //end wdthitter task
-        // vTaskDelete(wdthitter_task_handle);
+        vTaskDelete(wdthitter_task_handle);
 
         Setup();
 
         //create task for loop with max priority
         xTaskCreate(loop, "loop_task", 4096, NULL, configMAX_PRIORITIES - 1, NULL);
+
+        RegisterCANTasks();
     }
 }

@@ -41,6 +41,18 @@ namespace EmbeddedIOServices
             case 44:
 				_attinyDigitalService->InitPin(7, direction);
 				break;
+            case 45:
+				_esp32DigitalService->InitPin(0, direction);
+				break;
+            case 46:
+				_attinyDigitalService->InitPin(21, direction);
+				break;
+            case 48:
+				_attinyDigitalService->InitPin(3, direction);
+				break;
+            case 50:
+				_attinyDigitalService->InitPin(9, direction);
+				break;
         }
 	}
 	bool DigitalService_Mercedes::ReadPin(digitalpin_t pin)
@@ -63,6 +75,14 @@ namespace EmbeddedIOServices
 				return _attinyDigitalService->ReadPin(8);
 			case 44:
 				return _attinyDigitalService->ReadPin(7);
+			case 45:
+				return _esp32DigitalService->ReadPin(0);
+			case 46:
+				return _attinyDigitalService->ReadPin(21);
+			case 48:
+				return _attinyDigitalService->ReadPin(3);
+			case 50:
+				return _attinyDigitalService->ReadPin(9);
         }
 		return false;
 	}
@@ -84,6 +104,14 @@ namespace EmbeddedIOServices
 				return _attinyDigitalService->WritePin(8, value);
 			case 44:				
 				return _attinyDigitalService->WritePin(7, value);
+			case 45:
+				return _esp32DigitalService->WritePin(0, value);
+			case 46:
+				return _attinyDigitalService->WritePin(21, value);
+			case 48:
+				return _attinyDigitalService->WritePin(3, value);
+			case 50:
+				return _attinyDigitalService->WritePin(9, value);
         }
 	}
 	void DigitalService_Mercedes::AttachInterrupt(digitalpin_t pin, callback_t callBack)
