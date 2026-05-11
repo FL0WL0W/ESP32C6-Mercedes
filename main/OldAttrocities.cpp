@@ -312,7 +312,7 @@ typedef enum {
 float TorqueLoss = 0;
 float DrivelineRatio = 0;
 float TransmissionOilTemp = 0; //C
-float EngineRPM = 1200; // RPM
+float EngineRPM = 0; // RPM
 float EngineTorqueMaxCorrectionFactor = 0.421875;
 float AcceleratorPedalPosition = 0; // %
 float AcceleratorPedalPositionRaw = 0; // %
@@ -324,7 +324,7 @@ float DriverSelectedTorque = 0; // N m
 float AssistanceSystemSelectedTorque = 0; // N m
 float SystemBaseChipSelectedTorque = 0; // N m
 float TransmissionDriveshaftTorque = 0; // N m
-EngineRunStatus_t EngineRunStatus = EngineRunStatus_Run_NoRPMLimit;
+EngineRunStatus_t EngineRunStatus = EngineRunStatus_Stop;
 TCCStatus_t TCCStatus = TCCStatus_Disengaged;
 TransmissionSelectorPosition_t TransmissionSelectorPosition = TransmissionSelectorPosition_P;
 VehicleDrivingProgram_t VehicleDrivingProgram = VehicleDrivingProgram_Comfort;
@@ -355,7 +355,7 @@ bool AuxWaterPumpRequest = 1;
 HeatingCutoffValve_t HeatingCutoffValveState = HeatingCutoffValve_Open;
 bool ClutchDisengaged = 0;
 bool CEL = true;
-float CLT = 90; // *C
+float CLT = 0; // *C
 float IAT = 30; // *C
 float OilTemp = 0; // *C
 float OilLvl = 80; // mm
@@ -366,7 +366,7 @@ bool ACCompressorOn = false;
 bool ACCompressorOnRequest = false;
 float ACCompressorMaxTorque = 0; //nm
 bool FuelPumpOnRequest = 0;
-float DesiredEngineIdleRpm = 1200; // RPM
+float DesiredEngineIdleRpm = 0; // RPM
 float EngineEfficiency = 100; // %
 bool FSCMAlive = 1;
 float FuelPressureRequested = 6; // bar
@@ -555,8 +555,7 @@ static void CANTask100Hz(void *pvParameters)
         
         vTaskDelay(pdMS_TO_TICKS(10));
 
-
-        if(IgnitionSwitchState != IgnitionSwitchState_Off) {
+        if(IgnitionSwitchState != IgnitionSwitchState_Off && IgnitionSwitchState != IgnitionSwitchState_Lock) {
             //ENG_RS1_PT
             message.identifier = 0x1CD;
             message.extd = 0;
@@ -607,11 +606,57 @@ static void CANTask100Hz(void *pvParameters)
             message.data[6] = ((CAN105Cnt++ & 0xF) << 4) | ((AcceleratorPedalPositionFault & 0x1) << 3) | (EngineRunStatus & 0x7);
             message.data[7] = CalcJ1850CRC(message.data, 7);
             SendCan2(&message);
-            _embeddedIOServiceCollection.DigitalService->WritePin(digitalpin_t(50), true);
-            // ESP_LOGI("Pin50", "On");
-        } else {
-            _embeddedIOServiceCollection.DigitalService->WritePin(digitalpin_t(50), false);
-            // ESP_LOGI("Pin50", "Off");
+
+            //TCM_A1
+            message.identifier = 0x2F1;
+            message.extd = 0;
+            message.rtr = 0;
+            message.data_length_code = 8;
+            message.data[0] = TransmissionOilTemp + 50;
+            message.data[1] =   ((TCCNoLoad & 0x1) << 7) | (TCCStatus << 4) | 
+                                ((TCMLimp & 0x1) << 3) | ((BasicShiftingProgramOk & 0x1) << 2) | 
+                                ((HighDriveResistance & 0x1) << 1) | (ExcessiveTransmissionTemperature & 0x1);
+            message.data[2] =   ((TransmissionOffRoadActive & 0x1) << 7) | (TransmissionSelectorPosition << 4) | 
+                                ((TransmissionDrivingProgramManualActive & 0x1) << 3) | VehicleDrivingProgram;
+            message.data[3] = (StartBrakeRequest & 0x1) << 7;
+            const uint16_t transmissionDriveshaftTorque = TransmissionDriveshaftTorque;
+            message.data[4] = transmissionDriveshaftTorque >> 8;
+            message.data[5] = transmissionDriveshaftTorque;
+            message.data[6] =
+            message.data[7] = 0xFF;
+            SendCan2(&message);
+
+            //TCM_DISP_RQ
+            message.identifier = 0x2F3;
+            message.extd = 0;
+            message.rtr = 0;
+            message.data_length_code = 8;
+            message.data[0] = TransmissionDrivingPosition;
+            message.data[1] = TransmissionDrivingProgram;
+            message.data[2] = ((TransmissionBeep & 0x1) << 7) | (ShiftRecommendation << 5);
+            message.data[3] = 0;
+            message.data[4] = 0;
+            message.data[5] = GearTargetDisplay;
+            message.data[6] = 0;
+            message.data[7] = 0xFF;
+            SendCan2(&message);
+
+            //ENG_RQ2_TCM
+            message.identifier = 0xf3;
+            message.extd = 0;
+            message.rtr = 0;
+            message.data_length_code = 8;
+            message.data[0] = (Gear & 0xF) | ((GearTarget & 0xF) << 4);
+            message.data[1] = 0xFF;
+            uint16_t drivelineRatio = DrivelineRatio * 100;
+            message.data[2] = drivelineRatio << 8;
+            message.data[3] = drivelineRatio;
+            uint8_t torqueLoss = TorqueLoss * 4;
+            message.data[4] = torqueLoss;
+            message.data[5] = 0x0A;
+            message.data[6] = (CANF3Cnt++ & 0xF) << 4;
+            message.data[7] = CalcJ1850CRC(message.data, 7);
+            SendCan2(&message);
         }
         if(IgnitionSwitchState == IgnitionSwitchState_Start) {
             message.identifier = 0x1B9;
@@ -637,57 +682,6 @@ static void CANTask100Hz(void *pvParameters)
         } else {
             WeirdIgnitionThingOnCount = 0;
         }
-
-        //TCM_A1
-        message.identifier = 0x2F1;
-        message.extd = 0;
-        message.rtr = 0;
-        message.data_length_code = 8;
-        message.data[0] = TransmissionOilTemp + 50;
-        message.data[1] =   ((TCCNoLoad & 0x1) << 7) | (TCCStatus << 4) | 
-                            ((TCMLimp & 0x1) << 3) | ((BasicShiftingProgramOk & 0x1) << 2) | 
-                            ((HighDriveResistance & 0x1) << 1) | (ExcessiveTransmissionTemperature & 0x1);
-        message.data[2] =   ((TransmissionOffRoadActive & 0x1) << 7) | (TransmissionSelectorPosition << 4) | 
-                            ((TransmissionDrivingProgramManualActive & 0x1) << 3) | VehicleDrivingProgram;
-        message.data[3] = (StartBrakeRequest & 0x1) << 7;
-        const uint16_t transmissionDriveshaftTorque = TransmissionDriveshaftTorque;
-        message.data[4] = transmissionDriveshaftTorque >> 8;
-        message.data[5] = transmissionDriveshaftTorque;
-        message.data[6] =
-        message.data[7] = 0xFF;
-        SendCan2(&message);
-
-        //TCM_DISP_RQ
-        message.identifier = 0x2F3;
-        message.extd = 0;
-        message.rtr = 0;
-        message.data_length_code = 8;
-        message.data[0] = TransmissionDrivingPosition;
-        message.data[1] = TransmissionDrivingProgram;
-        message.data[2] = ((TransmissionBeep & 0x1) << 7) | (ShiftRecommendation << 5);
-        message.data[3] = 0;
-        message.data[4] = 0;
-        message.data[5] = GearTargetDisplay;
-        message.data[6] = 0;
-        message.data[7] = 0xFF;
-        SendCan2(&message);
-
-        //ENG_RQ2_TCM
-        message.identifier = 0xf3;
-        message.extd = 0;
-        message.rtr = 0;
-        message.data_length_code = 8;
-        message.data[0] = (Gear & 0xF) | ((GearTarget & 0xF) << 4);
-        message.data[1] = 0xFF;
-        uint16_t drivelineRatio = DrivelineRatio * 100;
-        message.data[2] = drivelineRatio << 8;
-        message.data[3] = drivelineRatio;
-        uint8_t torqueLoss = TorqueLoss * 4;
-        message.data[4] = torqueLoss;
-        message.data[5] = 0x0A;
-        message.data[6] = (CANF3Cnt++ & 0xF) << 4;
-        message.data[7] = CalcJ1850CRC(message.data, 7);
-        SendCan2(&message);
 
         //PPEI Fuel System Status 
         message.identifier = 0x1EB;
@@ -892,70 +886,72 @@ static void period10Hz(void *pvParameters)
         slowmovingrandomstandardvalue += (UINT32_MAX/2 - esp_random()) * 0.1f / UINT32_MAX;
         vTaskDelay(pdMS_TO_TICKS(100));
 
-        //AVI
-        // message.identifier = 0x208;
-        // message.extd = 0;
-        // message.rtr = 0;
-        // message.data_length_code = 8;
-        // message.data[0] = 0x3C;
-        // message.data[1] = 0x00;
-        // message.data[2] = 0x08;
-        // message.data[3] = 0x00;
-        // message.data[4] = 0x00;
-        // message.data[5] = 0x02;
-        // message.data[6] = 0x00;
-        // message.data[7] = CalcJ1850CRC(message.data, 7);;
-        // SendCan2(&message);
+        if(IgnitionSwitchState != IgnitionSwitchState_Off && IgnitionSwitchState != IgnitionSwitchState_Lock) {
+            //AVI
+            // message.identifier = 0x208;
+            // message.extd = 0;
+            // message.rtr = 0;
+            // message.data_length_code = 8;
+            // message.data[0] = 0x3C;
+            // message.data[1] = 0x00;
+            // message.data[2] = 0x08;
+            // message.data[3] = 0x00;
+            // message.data[4] = 0x00;
+            // message.data[5] = 0x02;
+            // message.data[6] = 0x00;
+            // message.data[7] = CalcJ1850CRC(message.data, 7);;
+            // SendCan2(&message);
 
-        //ECM_TEMP
-        message.identifier = 0x30D;
-        message.extd = 0;
-        message.rtr = 0;
-        message.data_length_code = 8;
-        message.data[0] = CLT + 40;
-        message.data[1] = IAT + 40;
-        message.data[2] = OilTemp + 40;
-        message.data[3] = OilLvl * 3.175f;
-        message.data[4] = OilQuality * 2.55f;
-        const uint16_t fuelConsumption = FuelConsumption * 4.615f;
-        message.data[5] = fuelConsumption >> 8;
-        message.data[6] = fuelConsumption;
-        message.data[7] = Baro * 1.283f;
-        SendCan2(&message);
+            //ECM_TEMP
+            message.identifier = 0x30D;
+            message.extd = 0;
+            message.rtr = 0;
+            message.data_length_code = 8;
+            message.data[0] = CLT + 40;
+            message.data[1] = IAT + 40;
+            message.data[2] = OilTemp + 40;
+            message.data[3] = OilLvl * 3.175f;
+            message.data[4] = OilQuality * 2.55f;
+            const uint16_t fuelConsumption = FuelConsumption * 4.615f;
+            message.data[5] = fuelConsumption >> 8;
+            message.data[6] = fuelConsumption;
+            message.data[7] = Baro * 1.283f;
+            SendCan2(&message);
 
-        //ECM_INFO1
-        message.identifier = 0x349;
-        message.extd = 0;
-        message.rtr = 0;
-        message.data_length_code = 8;
-        message.data[0] = ((AuxWaterPumpRequest & 0x1) << 7) | (HeatingCutoffValveState & 0x3);// | 0x7C;        
-        // if(ACCompressorMaxTorque * 4 < 0xFE)
-        //     message.data[1] = ACCompressorMaxTorque * 4;
-        // else
-            message.data[1] = 0xFE;
-        if(AcceleratorPedalPosition > 75 || EngineRPM > 4000)
+            //ECM_INFO1
+            message.identifier = 0x349;
+            message.extd = 0;
+            message.rtr = 0;
+            message.data_length_code = 8;
+            message.data[0] = ((AuxWaterPumpRequest & 0x1) << 7) | (HeatingCutoffValveState & 0x3);// | 0x7C;        
+            // if(ACCompressorMaxTorque * 4 < 0xFE)
+            //     message.data[1] = ACCompressorMaxTorque * 4;
+            // else
+                message.data[1] = 0xFE;
+            if(AcceleratorPedalPosition > 75 || EngineRPM > 4000)
+                message.data[1] = 0;
+            const uint16_t desiredEngineIdleRpm = DesiredEngineIdleRpm;
+            message.data[3] = ((ClutchDisengaged & 0x1) << 7) | ((FuelPumpOnRequest & 0x1) << 6) | ((desiredEngineIdleRpm >> 8) & 0x3F);
+            message.data[4] = desiredEngineIdleRpm;
+            message.data[5] = EngineEfficiency * 2;
+            message.data[6] = (FSCMAlive & 0x1) << 7;
+            message.data[7] = FuelPressureRequested * 20;
+            SendCan2(&message);
+
+            //CEL
+            CEL = gpio_get_level(GPIO_NUM_0);
+            if(EngineRPM < 200)
+                CEL = true;
+            message.identifier = 0x33D;
+            message.extd = 0;
+            message.rtr = 0;
+            message.data_length_code = 4;
+            message.data[0] = (CEL & 0x1) << 3;
             message.data[1] = 0;
-        const uint16_t desiredEngineIdleRpm = DesiredEngineIdleRpm;
-        message.data[3] = ((ClutchDisengaged & 0x1) << 7) | ((FuelPumpOnRequest & 0x1) << 6) | ((desiredEngineIdleRpm >> 8) & 0x3F);
-        message.data[4] = desiredEngineIdleRpm;
-        message.data[5] = EngineEfficiency * 2;
-        message.data[6] = (FSCMAlive & 0x1) << 7;
-        message.data[7] = FuelPressureRequested * 20;
-        SendCan2(&message);
-
-        //CEL
-        CEL = gpio_get_level(GPIO_NUM_0);
-        if(EngineRPM < 200)
-            CEL = true;
-        message.identifier = 0x33D;
-        message.extd = 0;
-        message.rtr = 0;
-        message.data_length_code = 4;
-        message.data[0] = (CEL & 0x1) << 3;
-        message.data[1] = 0;
-        message.data[2] = 0;
-        message.data[3] = 0x3F;
-        SendCan2(&message);
+            message.data[2] = 0;
+            message.data[3] = 0x3F;
+            SendCan2(&message);
+        }
 
         //PPEI Platform General Status
         message.identifier = 0x1F1;
@@ -1015,19 +1011,21 @@ static void period4Hz(void *pvParameters)
     {
         vTaskDelay(pdMS_TO_TICKS(250));
 
-        //0x202 - this value keeps the radio from saying theft protection. 
-        //data[0] must be 0x14, I tried 0x00 and 0xFF but those both place it into theft protection
-        //I tried 0xFF in data[1] and data[2] and radio didn't care.
-        //data[3] is crc
-        message.identifier = 0x202;
-        message.extd = 0;
-        message.rtr = 0;
-        message.data_length_code = 4;
-        message.data[0] = 0x14;
-        message.data[1] = 0x00;
-        message.data[2] = 0x00;
-        message.data[3] = CalcJ1850CRC(message.data, 3);
-        SendCan2(&message);
+        if(IgnitionSwitchState != IgnitionSwitchState_Off && IgnitionSwitchState != IgnitionSwitchState_Lock) {
+            //0x202 - this value keeps the radio from saying theft protection. 
+            //data[0] must be 0x14, I tried 0x00 and 0xFF but those both place it into theft protection
+            //I tried 0xFF in data[1] and data[2] and radio didn't care.
+            //data[3] is crc
+            message.identifier = 0x202;
+            message.extd = 0;
+            message.rtr = 0;
+            message.data_length_code = 4;
+            message.data[0] = 0x14;
+            message.data[1] = 0x00;
+            message.data[2] = 0x00;
+            message.data[3] = CalcJ1850CRC(message.data, 3);
+            SendCan2(&message);
+        }
     }
 }
 

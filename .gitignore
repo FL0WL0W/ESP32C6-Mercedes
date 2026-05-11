@@ -5,3 +5,4 @@ libs/*
 debug.log
 .cmake/*
 __pycache__/*
+.cache/*
