@@ -1011,7 +1011,7 @@ static void period4Hz(void *pvParameters)
     {
         vTaskDelay(pdMS_TO_TICKS(250));
 
-        if(IgnitionSwitchState != IgnitionSwitchState_Off && IgnitionSwitchState != IgnitionSwitchState_Lock) {
+        if(IgnitionSwitchState != IgnitionSwitchState_Lock) {
             //0x202 - this value keeps the radio from saying theft protection. 
             //data[0] must be 0x14, I tried 0x00 and 0xFF but those both place it into theft protection
             //I tried 0xFF in data[1] and data[2] and radio didn't care.
@@ -2255,6 +2255,8 @@ void MercedesCanRX2E5(can_send_callback_t send, const CANData_t data, const uint
 }
 
 void RegisterCANTasks() {
+    CRCJ1850Init();
+
     _embeddedIOServiceCollection.DigitalService->WritePin(digitalpin_t(50), false);
     _embeddedIOServiceCollection.DigitalService->InitPin(digitalpin_t(50), Out);
 

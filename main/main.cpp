@@ -503,7 +503,7 @@ extern "C"
         // mount_sd("/SD");
         start_http_server();
 
-        const Esp32IdfCANServiceChannelConfig canconfigs[2] 
+        static Esp32IdfCANServiceChannelConfig canconfigs[2] 
         {
             {
                 .enabled = true,
@@ -518,6 +518,10 @@ extern "C"
                 .g_config = TWAI_GENERAL_CONFIG_DEFAULT_V2(1, (gpio_num_t)2, (gpio_num_t)3, TWAI_MODE_NORMAL)
             }
         };
+        canconfigs[0].g_config.rx_queue_len = 1000;
+        canconfigs[0].g_config.tx_queue_len = 1000;
+        canconfigs[1].g_config.rx_queue_len = 1000;
+        canconfigs[1].g_config.tx_queue_len = 1000;
         _embeddedIOServiceCollection.CANService = new Esp32IdfCANService(canconfigs);
         _communicationService = new Esp32IdfCommunicationService_WebSocket(server, "/EFIGenieCommunication");
 
