@@ -931,6 +931,7 @@ static void period10Hz(void *pvParameters)
             if(AcceleratorPedalPosition > 75 || EngineRPM > 4000)
                 message.data[1] = 0;
             const uint16_t desiredEngineIdleRpm = DesiredEngineIdleRpm;
+            FuelPumpOnRequest = 1;
             message.data[3] = ((ClutchDisengaged & 0x1) << 7) | ((FuelPumpOnRequest & 0x1) << 6) | ((desiredEngineIdleRpm >> 8) & 0x3F);
             message.data[4] = desiredEngineIdleRpm;
             message.data[5] = EngineEfficiency * 2;
@@ -951,6 +952,8 @@ static void period10Hz(void *pvParameters)
             message.data[2] = 0;
             message.data[3] = 0x3F;
             SendCan2(&message);
+        } else {
+            FuelPumpOnRequest = 0;
         }
 
         //PPEI Platform General Status
@@ -1078,9 +1081,6 @@ static void period1Hz(void *pvParameters)
         message.data[5] = 0xFF;
         SendCan1(&message);
         elapsedReset = false;
-
-        bool pin50State = _embeddedIOServiceCollection.DigitalService->ReadPin(digitalpin_t(50));
-        ESP_LOGI("PIN50", "Pin 50 state: %d", pin50State);
     }
 }
 
@@ -1403,7 +1403,7 @@ void GMCanRX1F5(can_send_callback_t send, const CANData_t data, const uint8_t da
 }
 
 void GMCanRX1ED(can_send_callback_t send, const CANData_t data, const uint8_t dataLength) {
-    FuelPumpOnRequest = (data.Data[0] >> 6) & 0x1;
+    // FuelPumpOnRequest = (data.Data[0] >> 6) & 0x1;
     FuelPressureRequested = (((data.Data[0] & 0x3) << 8) | data.Data[1]) / 100.0f;
 }
 
@@ -1446,6 +1446,7 @@ void GMCanRX1C3(can_send_callback_t send, const CANData_t data, const uint8_t da
 
 void GMCanRX0C9(can_send_callback_t send, const CANData_t data, const uint8_t dataLength) {
     // ESP_LOGI("CRUISE", "%x", data.Data[3]);
+    FuelPumpOnRequest = (data.Data[0] >> 7) & 0x1;
     CruiseEnabled = (data.Data[3] & 0x20) != 0;
     if(data.Data[0] & 0x40) {
         EngineRunStatus = EngineRunStatus_Start;
@@ -2038,6 +2039,11 @@ void MercedesCanRX001(can_send_callback_t send, const CANData_t data, const uint
     // ESP_LOGI(EXAMPLE_TAG, "0x1 = %i %02x %02x %02x %02x %02x %02x %02x %02x", message->message.data_length_code, data[0], data[1], data[2], data[3], data[4], data[5], data[6], data[7]);  
     IgnitionOnStartInactive = ((data.Data[0] >> 3) & 0x1);
     IgnitionSwitchState = (IgnitionSwitchState_t)((data.Data[0] >> 0) & 0x7);
+    if(IgnitionSwitchState == IgnitionSwitchState_Start) {
+        _embeddedIOServiceCollection.DigitalService->WritePin(digitalpin_t(23), true);
+    } else {
+        _embeddedIOServiceCollection.DigitalService->WritePin(digitalpin_t(23), false);
+    }
     // ESP_LOGI("MERCEDES", "IgnitionOnStartInactive: %i, IgnitionSwitchState: %i", IgnitionOnStartInactive, IgnitionSwitchState);
 }
 
@@ -2257,8 +2263,8 @@ void MercedesCanRX2E5(can_send_callback_t send, const CANData_t data, const uint
 void RegisterCANTasks() {
     CRCJ1850Init();
 
-    _embeddedIOServiceCollection.DigitalService->WritePin(digitalpin_t(50), false);
-    _embeddedIOServiceCollection.DigitalService->InitPin(digitalpin_t(50), Out);
+    _embeddedIOServiceCollection.DigitalService->WritePin(digitalpin_t(23), false);
+    _embeddedIOServiceCollection.DigitalService->InitPin(digitalpin_t(23), Out);
 
     xTaskCreate(OBD2_Task, "obd2_task", 4096, NULL, 8, NULL);
     xTaskCreate(CANTask100Hz, "CANTask100Hz", 4096, NULL, 10, NULL);
