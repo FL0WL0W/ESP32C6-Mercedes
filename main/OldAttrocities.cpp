@@ -1078,7 +1078,7 @@ static void period10Hz(void *pvParameters)
         message.data[5] = 0;
         message.data[6] = ACCompressorTorque * 4; // this is a wild ass guess, GM sends back and forth displacement and torque is calculated in ECU. Mercedes calculates torque in AC system and sends back and forth torque values
         message.data[7] = 0x18;
-        SendCan1(&message);
+        // SendCan1(&message);
 
         //Antilock_Brake_and_TC_Status_HS
         message.identifier = 0x17D;
@@ -1163,7 +1163,7 @@ static void period1Hz(void *pvParameters)
         message.extd = 0;
         message.rtr = 0;
         message.data_length_code = 6;
-        message.data[0] = 0xE1;
+        message.data[0] = 0xE4;
         message.data[1] = 0x60;
         message.data[2] = timestamp >> 16;
         message.data[3] = timestamp >> 8;
@@ -2238,8 +2238,8 @@ void MercedesCanRX045(can_send_callback_t send, const CANData_t data, const uint
 
 void MercedesCanRX0F9(can_send_callback_t send, const CANData_t data, const uint8_t dataLength) {
     ACCompressorOn = (data.Data[0] >> 7) & 0x1;
-    ACCompressorTorque = data.Data[0] * 4;
-    ACCompressorOnRequest = (data.Data[6] >> 1) & 0x1;
+    ACCompressorTorque = data.Data[1] * 4;
+    ACCompressorOnRequest = (data.Data[6] >> 2) & 0x1;
 }
 
 void MercedesCanRX245(can_send_callback_t send, const CANData_t data, const uint8_t dataLength) {
