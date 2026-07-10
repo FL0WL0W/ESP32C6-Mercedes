@@ -16,11 +16,11 @@
 #include <time.h>
 #include <sys/time.h>
 #include "esp_random.h"
-#include "EmbeddedIOServiceCollection.h"
 #include <string.h>
+#include "ICANService.h"
+#include "IDigitalService.h"
 
 using namespace EmbeddedIOServices;
-using namespace EmbeddedIOOperations;
 
 uint32_t MercedesCANIDs[] = {
     0x001,
@@ -506,19 +506,20 @@ bool TractionControlSystemActive = false;
 bool AntiLockBrakeSystemActive = false;
 bool VehicleStabilityEnhancementSystemActive = false;
 
-extern EmbeddedIOServiceCollection _embeddedIOServiceCollection;
+extern ICANService *_canService;
+extern IDigitalService *_digitalService;
 
 void SendCan1(twai_message_t *message) {
     CANIdentifier_t identifier{.CANIdentifier = message->identifier, .CANBusNumber = 0};
     CANData_t data;
     memcpy(data.Data, message->data, message->data_length_code);
-    _embeddedIOServiceCollection.CANService->Send(identifier, data, message->data_length_code);
+    _canService->Send(identifier, data, message->data_length_code);
 }
 void SendCan2(twai_message_t *message) {
     CANIdentifier_t identifier{.CANIdentifier = message->identifier, .CANBusNumber = 1};
     CANData_t data;
     memcpy(data.Data, message->data, message->data_length_code);
-    _embeddedIOServiceCollection.CANService->Send(identifier, data, message->data_length_code);
+    _canService->Send(identifier, data, message->data_length_code);
 }
 
 uint8_t crcJ1850Table[256];
@@ -2130,9 +2131,9 @@ void MercedesCanRX001(can_send_callback_t send, const CANData_t data, const uint
     IgnitionOnStartInactive = ((data.Data[0] >> 3) & 0x1);
     IgnitionSwitchState = (IgnitionSwitchState_t)((data.Data[0] >> 0) & 0x7);
     if(IgnitionSwitchState == IgnitionSwitchState_Start) {
-        _embeddedIOServiceCollection.DigitalService->WritePin(digitalpin_t(23), true);
+        _digitalService->WritePin(digitalpin_t(23), true);
     } else {
-        _embeddedIOServiceCollection.DigitalService->WritePin(digitalpin_t(23), false);
+        _digitalService->WritePin(digitalpin_t(23), false);
     }
     // ESP_LOGI("MERCEDES", "IgnitionOnStartInactive: %i, IgnitionSwitchState: %i", IgnitionOnStartInactive, IgnitionSwitchState);
 }
@@ -2357,8 +2358,8 @@ void MercedesCanRX2E5(can_send_callback_t send, const CANData_t data, const uint
 void RegisterCANTasks() {
     CRCJ1850Init();
 
-    _embeddedIOServiceCollection.DigitalService->WritePin(digitalpin_t(23), false);
-    _embeddedIOServiceCollection.DigitalService->InitPin(digitalpin_t(23), Out);
+    _digitalService->WritePin(digitalpin_t(23), false);
+    _digitalService->InitPin(digitalpin_t(23), Out);
 
     xTaskCreate(OBD2_Task, "obd2_task", 4096, NULL, 8, NULL);
     xTaskCreate(CANTask100Hz, "CANTask100Hz", 4096, NULL, 10, NULL);
@@ -2368,35 +2369,35 @@ void RegisterCANTasks() {
     xTaskCreate(period4Hz, "Period4Hz", 4096, NULL, 10, NULL);
     xTaskCreate(period1Hz, "Period1Hz", 4096, NULL, 10, NULL);
 
-    _embeddedIOServiceCollection.CANService->RegisterReceiveCallBack({.CANIdentifier = 0x3D1, .CANBusNumber = 0 }, GMCanRX3D1);
-    _embeddedIOServiceCollection.CANService->RegisterReceiveCallBack({.CANIdentifier = 0x3E9, .CANBusNumber = 0 }, GMCanRX3E9);
-    _embeddedIOServiceCollection.CANService->RegisterReceiveCallBack({.CANIdentifier = 0x4C1, .CANBusNumber = 0 }, GMCanRX4C1);
-    _embeddedIOServiceCollection.CANService->RegisterReceiveCallBack({.CANIdentifier = 0x4C9, .CANBusNumber = 0 }, GMCanRX4C9);
-    _embeddedIOServiceCollection.CANService->RegisterReceiveCallBack({.CANIdentifier = 0x4D1, .CANBusNumber = 0 }, GMCanRX4D1);
-    _embeddedIOServiceCollection.CANService->RegisterReceiveCallBack({.CANIdentifier = 0x1A1, .CANBusNumber = 0 }, GMCanRX1A1);
-    _embeddedIOServiceCollection.CANService->RegisterReceiveCallBack({.CANIdentifier = 0x2C3, .CANBusNumber = 0 }, GMCanRX2C3);
-    _embeddedIOServiceCollection.CANService->RegisterReceiveCallBack({.CANIdentifier = 0x1F5, .CANBusNumber = 0 }, GMCanRX1F5);
-    _embeddedIOServiceCollection.CANService->RegisterReceiveCallBack({.CANIdentifier = 0x1ED, .CANBusNumber = 0 }, GMCanRX1ED);
-    _embeddedIOServiceCollection.CANService->RegisterReceiveCallBack({.CANIdentifier = 0x4F1, .CANBusNumber = 0 }, GMCanRX4F1);
-    _embeddedIOServiceCollection.CANService->RegisterReceiveCallBack({.CANIdentifier = 0x0F9, .CANBusNumber = 0 }, GMCanRX0F9);
-    _embeddedIOServiceCollection.CANService->RegisterReceiveCallBack({.CANIdentifier = 0x1C3, .CANBusNumber = 0 }, GMCanRX1C3);
-    _embeddedIOServiceCollection.CANService->RegisterReceiveCallBack({.CANIdentifier = 0x0C9, .CANBusNumber = 0 }, GMCanRX0C9);
-    _embeddedIOServiceCollection.CANService->RegisterReceiveCallBack({.CANIdentifier = 0x3F9, .CANBusNumber = 0 }, GMCanRX3F9);
+    _canService->RegisterReceiveCallBack({.CANIdentifier = 0x3D1, .CANBusNumber = 0 }, GMCanRX3D1);
+    _canService->RegisterReceiveCallBack({.CANIdentifier = 0x3E9, .CANBusNumber = 0 }, GMCanRX3E9);
+    _canService->RegisterReceiveCallBack({.CANIdentifier = 0x4C1, .CANBusNumber = 0 }, GMCanRX4C1);
+    _canService->RegisterReceiveCallBack({.CANIdentifier = 0x4C9, .CANBusNumber = 0 }, GMCanRX4C9);
+    _canService->RegisterReceiveCallBack({.CANIdentifier = 0x4D1, .CANBusNumber = 0 }, GMCanRX4D1);
+    _canService->RegisterReceiveCallBack({.CANIdentifier = 0x1A1, .CANBusNumber = 0 }, GMCanRX1A1);
+    _canService->RegisterReceiveCallBack({.CANIdentifier = 0x2C3, .CANBusNumber = 0 }, GMCanRX2C3);
+    _canService->RegisterReceiveCallBack({.CANIdentifier = 0x1F5, .CANBusNumber = 0 }, GMCanRX1F5);
+    _canService->RegisterReceiveCallBack({.CANIdentifier = 0x1ED, .CANBusNumber = 0 }, GMCanRX1ED);
+    _canService->RegisterReceiveCallBack({.CANIdentifier = 0x4F1, .CANBusNumber = 0 }, GMCanRX4F1);
+    _canService->RegisterReceiveCallBack({.CANIdentifier = 0x0F9, .CANBusNumber = 0 }, GMCanRX0F9);
+    _canService->RegisterReceiveCallBack({.CANIdentifier = 0x1C3, .CANBusNumber = 0 }, GMCanRX1C3);
+    _canService->RegisterReceiveCallBack({.CANIdentifier = 0x0C9, .CANBusNumber = 0 }, GMCanRX0C9);
+    _canService->RegisterReceiveCallBack({.CANIdentifier = 0x3F9, .CANBusNumber = 0 }, GMCanRX3F9);
 
-    _embeddedIOServiceCollection.CANService->RegisterReceiveCallBack({.CANIdentifier = 0x7DF, .CANBusNumber = 1 }, MercedesCanRX7DF);
-    _embeddedIOServiceCollection.CANService->RegisterReceiveCallBack({.CANIdentifier = 0x7E8, .CANBusNumber = 1 }, MercedesCanRX7E8);
-    _embeddedIOServiceCollection.CANService->RegisterReceiveCallBack({.CANIdentifier = 0x001, .CANBusNumber = 1 }, MercedesCanRX001);
-    _embeddedIOServiceCollection.CANService->RegisterReceiveCallBack({.CANIdentifier = 0x003, .CANBusNumber = 1 }, MercedesCanRX003);
-    _embeddedIOServiceCollection.CANService->RegisterReceiveCallBack({.CANIdentifier = 0x005, .CANBusNumber = 1 }, MercedesCanRX005);
-    _embeddedIOServiceCollection.CANService->RegisterReceiveCallBack({.CANIdentifier = 0x05F, .CANBusNumber = 1 }, MercedesCanRX05F);
-    _embeddedIOServiceCollection.CANService->RegisterReceiveCallBack({.CANIdentifier = 0x073, .CANBusNumber = 1 }, MercedesCanRX073);
-    _embeddedIOServiceCollection.CANService->RegisterReceiveCallBack({.CANIdentifier = 0x06D, .CANBusNumber = 1 }, MercedesCanRX06D);
-    _embeddedIOServiceCollection.CANService->RegisterReceiveCallBack({.CANIdentifier = 0x045, .CANBusNumber = 1 }, MercedesCanRX045);
-    _embeddedIOServiceCollection.CANService->RegisterReceiveCallBack({.CANIdentifier = 0x0F9, .CANBusNumber = 1 }, MercedesCanRX0F9);
-    _embeddedIOServiceCollection.CANService->RegisterReceiveCallBack({.CANIdentifier = 0x245, .CANBusNumber = 1 }, MercedesCanRX245);
-    _embeddedIOServiceCollection.CANService->RegisterReceiveCallBack({.CANIdentifier = 0x201, .CANBusNumber = 1 },MercedesCanRX201);
-    _embeddedIOServiceCollection.CANService->RegisterReceiveCallBack({.CANIdentifier = 0x203, .CANBusNumber = 1 },MercedesCanRX203);
-    _embeddedIOServiceCollection.CANService->RegisterReceiveCallBack({.CANIdentifier = 0x207, .CANBusNumber = 1 },MercedesCanRX207);
-    _embeddedIOServiceCollection.CANService->RegisterReceiveCallBack({.CANIdentifier = 0x283, .CANBusNumber = 1 },MercedesCanRX283);
-    _embeddedIOServiceCollection.CANService->RegisterReceiveCallBack({.CANIdentifier = 0x2E5, .CANBusNumber = 1 },MercedesCanRX2E5);
+    _canService->RegisterReceiveCallBack({.CANIdentifier = 0x7DF, .CANBusNumber = 1 }, MercedesCanRX7DF);
+    _canService->RegisterReceiveCallBack({.CANIdentifier = 0x7E8, .CANBusNumber = 1 }, MercedesCanRX7E8);
+    _canService->RegisterReceiveCallBack({.CANIdentifier = 0x001, .CANBusNumber = 1 }, MercedesCanRX001);
+    _canService->RegisterReceiveCallBack({.CANIdentifier = 0x003, .CANBusNumber = 1 }, MercedesCanRX003);
+    _canService->RegisterReceiveCallBack({.CANIdentifier = 0x005, .CANBusNumber = 1 }, MercedesCanRX005);
+    _canService->RegisterReceiveCallBack({.CANIdentifier = 0x05F, .CANBusNumber = 1 }, MercedesCanRX05F);
+    _canService->RegisterReceiveCallBack({.CANIdentifier = 0x073, .CANBusNumber = 1 }, MercedesCanRX073);
+    _canService->RegisterReceiveCallBack({.CANIdentifier = 0x06D, .CANBusNumber = 1 }, MercedesCanRX06D);
+    _canService->RegisterReceiveCallBack({.CANIdentifier = 0x045, .CANBusNumber = 1 }, MercedesCanRX045);
+    _canService->RegisterReceiveCallBack({.CANIdentifier = 0x0F9, .CANBusNumber = 1 }, MercedesCanRX0F9);
+    _canService->RegisterReceiveCallBack({.CANIdentifier = 0x245, .CANBusNumber = 1 }, MercedesCanRX245);
+    _canService->RegisterReceiveCallBack({.CANIdentifier = 0x201, .CANBusNumber = 1 },MercedesCanRX201);
+    _canService->RegisterReceiveCallBack({.CANIdentifier = 0x203, .CANBusNumber = 1 },MercedesCanRX203);
+    _canService->RegisterReceiveCallBack({.CANIdentifier = 0x207, .CANBusNumber = 1 },MercedesCanRX207);
+    _canService->RegisterReceiveCallBack({.CANIdentifier = 0x283, .CANBusNumber = 1 },MercedesCanRX283);
+    _canService->RegisterReceiveCallBack({.CANIdentifier = 0x2E5, .CANBusNumber = 1 },MercedesCanRX2E5);
 }

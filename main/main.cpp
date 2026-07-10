@@ -29,7 +29,7 @@
 #include <lwip/netdb.h>
 
 #include "ExpanderMain.h"
-#include "EmbeddedIOServiceCollection.h"
+#include "ServiceRegistry.h"
 #include "Variable.h"
 #include "CallBack.h"
 #include "Config.h"
@@ -201,7 +201,12 @@ extern "C"
 
     void *_config = 0;
     GeneratorMap<Variable> *_variableMap;
-    EmbeddedIOServiceCollection _embeddedIOServiceCollection;
+    ServiceRegistry _serviceRegistry;
+    IAnalogService *_analogService;
+    IDigitalService *_digitalService;
+    IPwmService *_pwmService;
+    ITimerService *_timerService;
+    ICANService *_canService;
     ICommunicationService *_communicationService;
     CommunicationHandler_EFIGenie *_efiGenieHandler;
     ExpanderMain *_expanderMain;
@@ -255,7 +260,7 @@ extern "C"
                 return false;
 
             size_t configSize = 0;
-            _expanderMain = new ExpanderMain(&_config, configSize, &_embeddedIOServiceCollection, _variableMap);
+            _expanderMain = new ExpanderMain(&_config, configSize, &_serviceRegistry, _variableMap);
 
             _expanderMain->Setup();
         }
@@ -271,7 +276,7 @@ extern "C"
         _variableMap = new GeneratorMap<Variable>();
 
         size_t _configSize = 0;
-        _expanderMain = new ExpanderMain(reinterpret_cast<void*>(_config), _configSize, &_embeddedIOServiceCollection, _variableMap);
+        _expanderMain = new ExpanderMain(reinterpret_cast<void*>(_config), _configSize, &_serviceRegistry, _variableMap);
 
         _efiGenieHandler = new CommunicationHandler_EFIGenie(_variableMap, expandermain_write, expandermain_quit, expandermain_start, _config);
         // ESP_LOGI("ASDF", "_config %p ", _efiGenieHandler->_config);
@@ -283,8 +288,8 @@ extern "C"
     void Loop() 
     {
         if(_expanderMain != 0) {
-            const tick_t now = _embeddedIOServiceCollection.TimerService->GetTick();
-            *loopTime = (float)(now-prev) / _embeddedIOServiceCollection.TimerService->GetTicksPerSecond();
+            const tick_t now = _timerService->GetTick();
+            *loopTime = (float)(now-prev) / _timerService->GetTicksPerSecond();
             prev = now;
             _expanderMain->Loop();
         }
@@ -319,17 +324,17 @@ extern "C"
         loop_task_handle = xTaskGetCurrentTaskHandle();
         loop_original_priority = uxTaskPriorityGet(loop_task_handle);
 
-        const tick_t timerTicksPerSecond = _embeddedIOServiceCollection.TimerService->GetTicksPerSecond();
+        const tick_t timerTicksPerSecond = _timerService->GetTicksPerSecond();
         Task *priority_restore_task = new Task(priority_restore_timer_callback, false);
         tick_t averageTick = timerTicksPerSecond / 1000;
         tick_t minTick = averageTick * 100;
         tick_t maxTick = 0;
-        tick_t lastTick = _embeddedIOServiceCollection.TimerService->GetTick();
+        tick_t lastTick = _timerService->GetTick();
         int loopcnt = 0;
         while (1)
         {
             // Start timer to restore priority after 1 tick, then set app_main to the lowest priority and yield
-            // _embeddedIOServiceCollection.TimerService->ScheduleTask(priority_restore_task, _embeddedIOServiceCollection.TimerService->GetTick() + timerTicksPerSecond / 1000);
+            // _timerService->ScheduleTask(priority_restore_task, _timerService->GetTick() + timerTicksPerSecond / 1000);
             // vTaskPrioritySet(loop_task_handle, 0);
             // taskYIELD();
             vTaskDelay(1);
@@ -341,7 +346,7 @@ extern "C"
                 wdt_hal_feed(&rtc_wdt_ctx);
                 wdt_hal_write_protect_enable(&rtc_wdt_ctx);
             }
-            const tick_t tickDelta = _embeddedIOServiceCollection.TimerService->GetTick() - lastTick;
+            const tick_t tickDelta = _timerService->GetTick() - lastTick;
             averageTick = (averageTick * 99 + (tickDelta)) / 100;
             if(tickDelta < minTick)
             {
@@ -356,7 +361,7 @@ extern "C"
             {
                 ESP_LOGI("MainLoop", "transaction: %d", transactionCount);
             }
-            lastTick = _embeddedIOServiceCollection.TimerService->GetTick();
+            lastTick = _timerService->GetTick();
         }
     }
 
@@ -452,7 +457,7 @@ extern "C"
         }
         ESP_ERROR_CHECK(ret);
 
-        //initialize netlibs/EmbeddedIOServices/HardwareAbstractions/ATTiny427Expander/src/AnalogService_ATTiny427Expander.cpp libs/EmbeddedIOServices/HardwareAbstractions/ATTiny427Expander/src/ATTiny427_EVSYSService.cpp libs/EmbeddedIOServices/HardwareAbstractions/ATTiny427Expander/src/ATTiny427_ExpanderService.cpp libs/EmbeddedIOServices/HardwareAbstractions/ATTiny427Expander/src/ATTiny427_PassthroughService.cpp libs/EmbeddedIOServices/HardwareAbstractions/ATTiny427Expander/src/DigitalService_ATTiny427Expander.cpp libs/EmbeddedIOServices/HardwareAbstractions/ATTiny427Expander/src/PwmService_ATTiny427Expander.cpp
+        //initialize netlibs
         ESP_ERROR_CHECK(esp_netif_init());
         ESP_ERROR_CHECK(esp_event_loop_create_default());
 
@@ -495,10 +500,14 @@ extern "C"
 
         installAttiny427UART();
 
-        _embeddedIOServiceCollection.AnalogService = new AnalogService_Mercedes(_esp32AnalogService, _attinyAnalogService);
-        _embeddedIOServiceCollection.DigitalService = new DigitalService_Mercedes(_esp32DigitalService, _attinyDigitalService, _attinyPassthroughService);
-        _embeddedIOServiceCollection.PwmService = new PwmService_Mercedes(_esp32PwmService, _attinyPwmService, _attinyPassthroughService, _attinyDigitalService);
-        _embeddedIOServiceCollection.TimerService = new Esp32IdfTimerService();
+        _analogService = new AnalogService_Mercedes(_esp32AnalogService, _attinyAnalogService);
+        _digitalService = new DigitalService_Mercedes(_esp32DigitalService, _attinyDigitalService, _attinyPassthroughService);
+        _pwmService = new PwmService_Mercedes(_esp32PwmService, _attinyPwmService, _attinyPassthroughService, _attinyDigitalService);
+        _timerService = new Esp32IdfTimerService();
+        _serviceRegistry.Register<IAnalogService>(_analogService);
+        _serviceRegistry.Register<IDigitalService>(_digitalService);
+        _serviceRegistry.Register<IPwmService>(_pwmService);
+        _serviceRegistry.Register<ITimerService>(_timerService);
 
         // mount_sd("/SD");
         start_http_server();
@@ -522,7 +531,8 @@ extern "C"
         canconfigs[0].g_config.tx_queue_len = 1000;
         canconfigs[1].g_config.rx_queue_len = 1000;
         canconfigs[1].g_config.tx_queue_len = 1000;
-        _embeddedIOServiceCollection.CANService = new Esp32IdfCANService(canconfigs);
+        _canService = new Esp32IdfCANService(canconfigs);
+        _serviceRegistry.Register<ICANService>(_canService);
         _communicationService = new Esp32IdfCommunicationService_WebSocket(server, "/EFIGenieCommunication");
 
 		const httpd_uri_t resetPost = {
