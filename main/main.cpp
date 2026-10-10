@@ -35,6 +35,8 @@
 #include "Config.h"
 #include "CommunicationHandler_Prefix.h"
 #include "CommunicationHandlers/CommunicationHandler_EFIGenie.h"
+#include "CommunicationHandlers/CommunicationHandler_OBD2PIDResponder.h"
+#include "AggregateCommunicationService.h"
 #include "AnalogService_Mercedes.h"
 #include "DigitalService_Mercedes.h"
 #include "PwmService_Mercedes.h"
@@ -207,6 +209,8 @@ extern "C"
     IPwmService *_pwmService;
     ITimerService *_timerService;
     ICANService *_canService;
+    ICommunicationService *_isotpService;
+    CommunicationHandler_OBD2PIDResponder *_obd2PIDHandler;
     ICommunicationService *_communicationService;
     CommunicationHandler_EFIGenie *_efiGenieHandler;
     ExpanderMain *_expanderMain;
@@ -527,11 +531,16 @@ extern "C"
                 .g_config = TWAI_GENERAL_CONFIG_DEFAULT_V2(1, (gpio_num_t)2, (gpio_num_t)3, TWAI_MODE_NORMAL)
             }
         };
+
         canconfigs[0].g_config.rx_queue_len = 1000;
         canconfigs[0].g_config.tx_queue_len = 1000;
         canconfigs[1].g_config.rx_queue_len = 1000;
         canconfigs[1].g_config.tx_queue_len = 1000;
         _canService = new Esp32IdfCANService(canconfigs);
+        ICommunicationService *broadcastService = _canService->GetISOTPService({.CANIdentifier = 0x7DF, .CANBusNumber = 1 }, {.CANIdentifier = 0x7E8, .CANBusNumber = 1 });
+        ICommunicationService *unicastService = _canService->GetISOTPService({.CANIdentifier = 0x7E0, .CANBusNumber = 1 }, {.CANIdentifier = 0x7E8, .CANBusNumber = 1 });
+        _isotpService = new AggregateCommunicationService((ICommunicationService*[]){broadcastService, unicastService}, 2);
+        _obd2PIDHandler = new CommunicationHandler_OBD2PIDResponder(_isotpService);
         _serviceRegistry.Register<ICANService>(_canService);
         _communicationService = new Esp32IdfCommunicationService_WebSocket(server, "/EFIGenieCommunication");
 

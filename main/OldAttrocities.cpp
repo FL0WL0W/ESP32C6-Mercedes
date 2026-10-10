@@ -19,8 +19,13 @@
 #include <string.h>
 #include "ICANService.h"
 #include "IDigitalService.h"
+#include "ICommunicationService.h"
+#include "CommunicationHandlers/CommunicationHandler_OBD2PIDResponder.h"
+#include "Operations/Operation_StaticVariable.h"
 
 using namespace EmbeddedIOServices;
+using namespace OperationArchitecture;
+using namespace EFIGenie;
 
 uint32_t MercedesCANIDs[] = {
     0x001,
@@ -507,6 +512,8 @@ bool AntiLockBrakeSystemActive = false;
 bool VehicleStabilityEnhancementSystemActive = false;
 
 extern ICANService *_canService;
+extern ICommunicationService *_isotpService;
+extern CommunicationHandler_OBD2PIDResponder *_obd2PIDHandler;
 extern IDigitalService *_digitalService;
 
 void SendCan1(twai_message_t *message) {
@@ -1652,67 +1659,7 @@ uint32_t timestampclosetonow(uint32_t now, uint32_t WheelTS) {
 
 QueueHandle_t obd2queue;
 void SendOBD2(uint8_t data[], uint16_t length) {
-    twai_message_t message;
-    message.ss = 0;
-    message.self = 0;
-    message.dlc_non_comp = 0;
-    message.identifier = 0x7E8;
-    message.extd = 0;
-    message.rtr = 0;
-    message.data_length_code = 8;
-    if(length < 8) { //single frame
-        message.data[0] = length;
-        message.data[1] = 0x55;
-        message.data[2] = 0x55;
-        message.data[3] = 0x55;
-        message.data[4] = 0x55;
-        message.data[5] = 0x55;
-        message.data[6] = 0x55;
-        message.data[7] = 0x55;
-        memcpy(&message.data[1], data, length);
-        SendCan2(&message);
-    } else { // multiframe
-        message.data[0] = (length>>8) | 0x10;
-        message.data[1] = length;
-        uint8_t sn = 1;
-        memcpy(&message.data[2], data, 6);
-        SendCan2(&message);
-        uint8_t dataIndex = 6;
-        length -= 6;
-        while(length > 0) {
-            uint8_t buff[9];
-            if(xQueueReceive(obd2queue, buff, pdMS_TO_TICKS(50)) == pdTRUE) {
-                if((buff[0] & 0xF0) != 0x30)
-                    break;
-                if((buff[0] & 0x0F) == 2)
-                    break;
-            } else {
-                buff[1] = 4;
-                buff[2] = 50;
-            }
-            uint8_t blocksize = buff[1];
-            uint8_t stTicks = pdMS_TO_TICKS(buff[2] + portTICK_PERIOD_MS/2);
-            if(stTicks < 1)
-                stTicks = 1;
-            for(uint8_t i=0; i<blocksize; i++) {
-                message.data[0] = (sn++ & 0xF) | 0x20;
-                message.data[1] = 0x55;
-                message.data[2] = 0x55;
-                message.data[3] = 0x55;
-                message.data[4] = 0x55;
-                message.data[5] = 0x55;
-                message.data[6] = 0x55;
-                message.data[7] = 0x55;
-                memcpy(&message.data[1], &data[dataIndex], length > 7? 7 : length);
-                SendCan2(&message);
-                dataIndex+=7;
-                length-=7;
-                if(length < 1)
-                    break;
-                vTaskDelay(stTicks);
-            }
-        }
-    }
+    _isotpService->Send(data, length);
 }
 
 void OBD2ResponseService1(int PID, uint8_t data[], uint8_t size) {
@@ -1722,153 +1669,6 @@ void OBD2ResponseService1(int PID, uint8_t data[], uint8_t size) {
     memcpy(&response[2], data, size);
     SendOBD2(response, size + 2);
     free(response);
-}
-
-float snap = 1337;
-void OBD2RequestService1(int PID) {
-    switch(PID) {
-        case 0x00: {
-            uint8_t response[] = {0xEE, 0x5A, 0xE8, 0x13};
-            return OBD2ResponseService1(PID, response, 4);
-        } case 0x01: {
-            uint8_t response[] = {0x00, 0x07, 0xFD, 0x00};
-            return OBD2ResponseService1(PID, response, 4);
-        } case 0x02: {
-            uint8_t response[] = {0x00, 0x00};
-            return OBD2ResponseService1(PID, response, 2);
-        } case 0x03: {
-            uint8_t response[] = {0x02, 0x02};
-            return OBD2ResponseService1(PID, response, 2);
-        } case 0x05: {
-            uint8_t response = CLT + 40;
-            return OBD2ResponseService1(PID, &response, 1);
-        } case 0x06: {
-            uint8_t response = 128 + 4 * slowmovingrandomstandardvalue;
-            return OBD2ResponseService1(PID, &response, 1);
-        } case 0x07: {
-            if(snap == 1337)
-                snap = slowmovingrandomstandardvalue;
-            uint8_t response = 128 + 4 * snap;
-            return OBD2ResponseService1(PID, &response, 1);
-        } case 0x0A: {
-            uint8_t response = FuelPressure * 33;
-            return OBD2ResponseService1(PID, &response, 1);
-        } case 0x0C: {
-            uint16_t engineRPMX4 = EngineRPM * 4;
-            uint8_t response[] = {(uint8_t)(engineRPMX4>>8), (uint8_t)engineRPMX4};
-            return OBD2ResponseService1(PID, response, 2);
-        } case 0x0D: {
-            uint8_t response = CurrentSpeed;
-            return OBD2ResponseService1(PID, &response, 1);
-        } case 0x0F: {
-            uint8_t response = IAT + 40;
-            return OBD2ResponseService1(PID, &response, 1);
-        } case 0x11: {
-            uint8_t response = (AcceleratorPedalPosition * 100) / 255;
-            return OBD2ResponseService1(PID, &response, 1);
-        } case 0x12: {
-            uint8_t response = 0x01;
-            return OBD2ResponseService1(PID, &response, 1);
-        } case 0x13: {
-            uint8_t response = 0x03;
-            return OBD2ResponseService1(PID, &response, 1);
-        } case 0x15: {
-            uint8_t response[] = {  (uint8_t)(((usec()+300000) % 2000000 > 1000000? 18 : 162) + 4 * slowmovingrandomstandardvalue), 
-                                    (uint8_t)(128 + 4 * slowmovingrandomstandardvalue) };
-            return OBD2ResponseService1(PID, response, 2);
-        } case 0x1C: {
-            uint8_t response = 0x01;
-            return OBD2ResponseService1(PID, &response, 1);
-        } case 0x1F: {
-            uint16_t engineRunElapsedSeconds = EngineRunElapsedSeconds > 65535? 65535 : EngineRunElapsedSeconds;
-            uint8_t response[] = {(uint8_t)(engineRunElapsedSeconds>>8), (uint8_t)engineRunElapsedSeconds};
-            return OBD2ResponseService1(PID, response, 2);
-        } case 0x20: {
-            uint8_t response[] = {0x80, 0x1D, 0xB0, 0x11};
-            return OBD2ResponseService1(PID, response, 4);
-        } case 0x21: {
-            uint8_t response[] = {0x00, 0x00};
-            return OBD2ResponseService1(PID, response, 2);
-        } case 0x2C: {
-            uint8_t response = 0x00;
-            return OBD2ResponseService1(PID, &response, 1);
-        } case 0x2D: {
-            uint8_t response = 128;
-            return OBD2ResponseService1(PID, &response, 1);
-        } case 0x2E: {
-            uint8_t response = 0x00;
-            return OBD2ResponseService1(PID, &response, 1);
-        } case 0x30: {
-            // uint8_t response = 0xFF; //TODO Warmup Count
-            // return OBD2ResponseService1(PID, &response, 1);
-            return;
-        } case 0x31: {
-            // uint8_t response[] = {0xFF, 0xFF};; //TODO Distance
-            // return OBD2ResponseService1(PID, response, 2);
-            return;
-        } case 0x33: {
-            uint8_t response = Baro;
-            return OBD2ResponseService1(PID, &response, 1);
-        } case 0x34: {
-            uint16_t o2Current = 0x8000 + (usec() % 2000000 > 1000000? -94 : 111) + 75 * slowmovingrandomstandardvalue;
-            uint16_t o2Equivalence = 32786 + (usec() % 2000000 > 1000000? -141 : 163) + 100 * slowmovingrandomstandardvalue;
-            uint8_t response[] = { (uint8_t)(o2Equivalence >> 8), (uint8_t)o2Equivalence, (uint8_t)(o2Current >> 8), (uint8_t)o2Current};
-            return OBD2ResponseService1(PID, response, 4);
-        } case 0x3C: {
-            uint16_t catTemp = CATTemp != -1337? (CATTemp + 40) * 10 : 700;
-            uint8_t response[] = {(uint8_t)(catTemp>>8), (uint8_t)catTemp};
-            return OBD2ResponseService1(PID, response, 2);
-        } case 0x40: {
-            uint8_t response[] = {0xD8, 0xA0, 0x00, 0x00};
-            return OBD2ResponseService1(PID, response, 4);
-        } case 0x41: {
-            uint8_t response[] = {  0x00, 
-                                    (uint8_t)(EngineRunElapsedSeconds > 1? 0x07 : 0x37), 
-                                    0xFF, 
-                                    (uint8_t)(EngineRunElapsedSeconds > 2? (EngineRunElapsedSeconds > 63? (EngineRunElapsedSeconds > 360? 0xFD : 0xFE) : 0xF8) : 0x18) };
-            return OBD2ResponseService1(PID, response, 4);
-        } case 0x42: {
-            uint16_t voltage = (EngineRPM > 400? 14387 : 11892) + slowmovingrandomstandardvalue * 30;
-            uint8_t response[] = { (uint8_t)(voltage>>8), (uint8_t)voltage };
-            return OBD2ResponseService1(PID, response, 2);
-        } case 0x44: {
-            uint16_t equivalencRatio = 32786;
-            uint8_t response[] = { (uint8_t)(equivalencRatio>>8), (uint8_t)equivalencRatio };
-            return OBD2ResponseService1(PID, response, 2);
-        } 
-        case 0x45:
-        case 0x47:
-        case 0x48:
-        case 0x49:
-        case 0x4A: 
-        case 0x4B: 
-        case 0x4C:  {
-            uint8_t response = (AcceleratorPedalPosition * 100) / 255;
-            return OBD2ResponseService1(PID, &response, 1);
-        } case 0x4D: {
-            uint16_t response = 0x0000;
-            return OBD2ResponseService1(PID, (uint8_t *)(&response), 2);
-        } case 0x4E: {
-            // uint16_t response = 0xFFFF; //TODO DTC Reset
-            // return OBD2ResponseService1(PID, &response, 2);
-            return;
-        } case 0x60: {
-            uint8_t response[] = {0x00, 0x00, 0x00, 0x00};
-            return OBD2ResponseService1(PID, response, 4);
-        } case 0x80: {
-            uint8_t response[] = {0x00, 0x00, 0x00, 0x00};
-            return OBD2ResponseService1(PID, response, 4);
-        } case 0xA0: {
-            uint8_t response[] = {0x00, 0x00, 0x00, 0x00};
-            return OBD2ResponseService1(PID, response, 4);
-        } case 0xC0: {
-            uint8_t response[] = {0x00, 0x00, 0x00, 0x00};
-            return OBD2ResponseService1(PID, response, 4);
-        } case 0xE0: {
-            uint8_t response[] = {0x00, 0x00, 0x00, 0x00};
-            return OBD2ResponseService1(PID, response, 4);
-        } 
-    }
 }
 
 void OBD2ResponseService6(int MID, uint8_t data[], uint8_t size) {
@@ -1928,7 +1728,7 @@ void OBD2ResponseService8(int TID, uint8_t data[], uint8_t size) {
     free(response);
 }
 
-uint8_t OBD2RequestService8(int TID, uint8_t data[], uint8_t size) {
+uint8_t OBD2RequestService8(int TID, const uint8_t data[], uint8_t size) {
     if(TID == 1) {
         uint8_t response[] = { 0x00, 0x00, 0x00, 0x00 };
         OBD2ResponseService8(TID, response, 4);
@@ -1973,10 +1773,11 @@ void OBD2RequestService9(int SID) {
     }
 }
 
-void ParseOBD2(uint8_t *data, uint32_t OBD2_RXBytes) {
+size_t ParseOBD2(communication_send_callback_t sendCallback, const void *dataBuf, size_t OBD2_RXBytes) {
+    const uint8_t *data = (const uint8_t *)dataBuf;
     uint8_t dataIndex = 0;
     if(OBD2_RXBytes < 1)
-        return;
+        return 0;
     uint8_t OBD2_Mode = data[dataIndex++];
     OBD2_RXBytes--;
     
@@ -1990,11 +1791,7 @@ void ParseOBD2(uint8_t *data, uint32_t OBD2_RXBytes) {
     message.data_length_code = 8;
 
     switch(OBD2_Mode) {
-        case 1: { //Read PID
-            while(OBD2_RXBytes-- > 0)
-                OBD2RequestService1(data[dataIndex++]);
-            return;
-        } case 2: { //Read Freeze Frame
+        case 2: { //Read Freeze Frame
             while(OBD2_RXBytes-- > 0) {
                 if(data[dataIndex++] == 2) {
                     uint8_t response[] = { 0x42, 0x02, 0x00, 0x00, 0x00 };
@@ -2003,7 +1800,7 @@ void ParseOBD2(uint8_t *data, uint32_t OBD2_RXBytes) {
                 dataIndex++;
                 OBD2_RXBytes--;
             }
-            return;
+            return dataIndex;
         } 
         case 3: //Read DTCs
         case 7: //Read Pending DTCs
@@ -2013,104 +1810,32 @@ void ParseOBD2(uint8_t *data, uint32_t OBD2_RXBytes) {
                 uint8_t response[] = { (uint8_t)(0x40 + OBD2_Mode), 0x00 };
                 SendOBD2(response, 2);
             }
-            return;
+            return dataIndex;
         } case 4: { //Clear DTCs
             if(dataIndex > 0) {
                 uint8_t response[] = { 0x44 };
                 SendOBD2(response, 1);
             }
-            return;
+            return dataIndex;
         } case 6: { //Request On-Board Monitoring Test Results
             while(OBD2_RXBytes-- > 0)
                 OBD2RequestService6(data[dataIndex++]);
-            return;
+            return dataIndex;
         } case 8: { //Request  Control of On-Board System
             while(OBD2_RXBytes-- > 0) {
                 uint8_t processedBytes = OBD2RequestService8(data[dataIndex], &data[dataIndex + 1], OBD2_RXBytes);
                 OBD2_RXBytes -= processedBytes;
                 dataIndex += processedBytes + 1;
             }
-            return;
+            return dataIndex;
         } case 9: { //Request Vehicle Information
             while(OBD2_RXBytes-- > 0)
                 OBD2RequestService9(data[dataIndex++]);
-            return;
+            return dataIndex;
         }
     }
+    return 0;
 }
-
-static void OBD2_Task(void *arg) {
-    obd2queue = xQueueCreate( 20, 9 );
-        twai_message_t message;
-        message.ss = 0;
-        message.self = 0;
-        message.dlc_non_comp = 0;
-        message.identifier = 0x7E8;
-        message.extd = 0;
-        message.rtr = 0;
-        message.data_length_code = 8;
-
-    while(1) {
-        uint8_t buff[9];
-        if(xQueueReceive(obd2queue, buff, 1000 / portTICK_PERIOD_MS) == pdTRUE) {
-            if((buff[0] & 0xF0) == 0) { //single frame
-                ParseOBD2(&buff[1], buff[0]);
-            } else if((buff[0] & 0xF0) == 0x10) { //multframe
-                uint8_t *messagebuff;
-                uint32_t messageIndex = 0;
-                uint32_t size = ((buff[0] & 0x0F) << 8) | buff[1];
-                if(size==0) {
-                    size = (buff[2] << 24) | (buff[3] << 16) | (buff[4] << 8) | buff[5];
-                    if(size > 0x1000){
-                        //send flow control overflow frame
-                        message.data[0] = 0x32;
-                        message.data[1] = 0;
-                        message.data[2] = 0;
-                        message.data[3] = 0x55;
-                        message.data[4] = 0x55;
-                        message.data[5] = 0x55;
-                        message.data[6] = 0x55;
-                        message.data[7] = 0x55;
-                        SendCan2(&message);
-                        continue;
-                    }
-                    messagebuff = (uint8_t *)malloc(size);
-                } else {
-                    messagebuff = (uint8_t *)malloc(size);
-                    messageIndex = buff[8]-2;
-                    memcpy(messagebuff, &buff[2], messageIndex);
-                }
-
-                //send flow control frame
-                const uint8_t blocksize = 1;
-                const uint8_t st = 100;
-                while(messageIndex < size) {
-                    message.data[0] = 0x30;
-                    message.data[1] = blocksize;
-                    message.data[2] = st;
-                    message.data[3] = 0x55;
-                    message.data[4] = 0x55;
-                    message.data[5] = 0x55;
-                    message.data[6] = 0x55;
-                    message.data[7] = 0x55;
-                    SendCan2(&message);
-                    for(uint8_t sn = 0; sn < blocksize; sn++) {
-                        if(xQueueReceive(obd2queue, buff, 1000 / portTICK_PERIOD_MS) != pdTRUE)
-                            goto OBD2_Taskcleanup;
-                        if((buff[0] & 0xF0) != 0x20)
-                            goto OBD2_Taskcleanup;
-                        memcpy(&messagebuff[messageIndex], &buff[1], buff[8]-1);
-                    }
-                }
-
-                ParseOBD2(messagebuff, size);
-OBD2_Taskcleanup:
-                free(messagebuff);
-            }
-        }
-    }
-}
-
 
 void MercedesCanRX7DF(can_send_callback_t send, const CANData_t data, const uint8_t dataLength) {
     uint8_t obd2message[9];
@@ -2355,13 +2080,73 @@ void MercedesCanRX2E5(can_send_callback_t send, const CANData_t data, const uint
     FuelPressure = data.Data[0] / 20.0f;
 }
 
+template<typename T>
+class CastMultiplyAndOffset : public AbstractOperation {
+    private:
+        T* _ptr;
+        float _multiplier;
+        float _offset;
+        VariableType _type;
+    public:
+        CastMultiplyAndOffset(T* ptr, float multiplier, float offset, VariableType type) : AbstractOperation(1, 0), _ptr(ptr), _multiplier(multiplier), _offset(offset), _type(type) {}
+        void AbstractExecute(Variable **variables) override {
+            switch(_type) {
+                case VariableType::UINT8:
+                    *variables[0] = static_cast<uint8_t>(*_ptr * _multiplier + _offset);
+                    break;
+                case VariableType::UINT16:
+                    *variables[0] = static_cast<uint16_t>(*_ptr * _multiplier + _offset);
+                    break;
+                case VariableType::UINT32:
+                    *variables[0] = static_cast<uint32_t>(*_ptr * _multiplier + _offset);
+                    break;
+                case VariableType::UINT64:
+                    *variables[0] = static_cast<uint64_t>(*_ptr * _multiplier + _offset);
+                    break;
+                case VariableType::INT8:
+                    *variables[0] = static_cast<int8_t>(*_ptr * _multiplier + _offset);
+                    break;
+                case VariableType::INT16:
+                    *variables[0] = static_cast<int16_t>(*_ptr * _multiplier + _offset);
+                    break;
+                case VariableType::INT32:
+                    *variables[0] = static_cast<int32_t>(*_ptr * _multiplier + _offset);
+                    break;
+                case VariableType::INT64:
+                    *variables[0] = static_cast<int64_t>(*_ptr * _multiplier + _offset);
+                    break;
+                case VariableType::FLOAT:
+                    *variables[0] = static_cast<float>(*_ptr * _multiplier + _offset);
+                    break;
+                case VariableType::DOUBLE:
+                    *variables[0] = static_cast<double>(*_ptr * _multiplier + _offset);
+                    break;
+                case VariableType::BOOLEAN:
+                    *variables[0] = static_cast<bool>(*_ptr * _multiplier + _offset);
+                    break;
+                default:
+                    return;
+            }
+        }
+};
+
+class OperationFunction : public AbstractOperation {
+    private:
+        std::function<void(Variable*)> _func;
+    public:
+        OperationFunction(std::function<void(Variable*)> func) :  AbstractOperation(1, 0), _func(func) {}
+        void AbstractExecute(Variable **variables) override {
+            _func(variables[0]);
+        }
+};
+
+float snap = 1337;
 void RegisterCANTasks() {
     CRCJ1850Init();
 
     _digitalService->WritePin(digitalpin_t(23), false);
     _digitalService->InitPin(digitalpin_t(23), Out);
 
-    xTaskCreate(OBD2_Task, "obd2_task", 4096, NULL, 8, NULL);
     xTaskCreate(CANTask100Hz, "CANTask100Hz", 4096, NULL, 10, NULL);
     xTaskCreate(period50Hz, "Period50Hz", 4096, NULL, 10, NULL);
     xTaskCreate(period33Hz, "Period33Hz", 4096, NULL, 10, NULL);
@@ -2400,4 +2185,70 @@ void RegisterCANTasks() {
     _canService->RegisterReceiveCallBack({.CANIdentifier = 0x207, .CANBusNumber = 1 },MercedesCanRX207);
     _canService->RegisterReceiveCallBack({.CANIdentifier = 0x283, .CANBusNumber = 1 },MercedesCanRX283);
     _canService->RegisterReceiveCallBack({.CANIdentifier = 0x2E5, .CANBusNumber = 1 },MercedesCanRX2E5);
+
+    _isotpService->RegisterReceiveCallBack(ParseOBD2);
+    _obd2PIDHandler->RegisterPID(0x01, new Operation_StaticVariable(static_cast<uint32_t>(0x0007FD00))); //DTC
+    _obd2PIDHandler->RegisterPID(0x02, new Operation_StaticVariable(static_cast<uint16_t>(0x0000))); //Freeze Frame DTC
+    _obd2PIDHandler->RegisterPID(0x03, new Operation_StaticVariable(static_cast<uint16_t>(0x0202))); //Fuel System Status
+    _obd2PIDHandler->RegisterPID(0x05, new CastMultiplyAndOffset(&CLT, 1, 40, VariableType::UINT8)); //Coolant Temperature
+    _obd2PIDHandler->RegisterPID(0x06, new OperationFunction([](Variable* var) { //
+        *var = static_cast<uint8_t>(128 + 4 * slowmovingrandomstandardvalue);
+    })); 
+    _obd2PIDHandler->RegisterPID(0x07, new OperationFunction([](Variable* var) { //
+        if(snap == 1337)
+            snap = slowmovingrandomstandardvalue;
+        *var = static_cast<uint8_t>(128 + 4 * snap);
+    }));
+    _obd2PIDHandler->RegisterPID(0x0A, new CastMultiplyAndOffset(&FuelPressure, 33, 0, VariableType::UINT8)); //Fuel Pressure
+    _obd2PIDHandler->RegisterPID(0x0C, new CastMultiplyAndOffset(&EngineRPM, 4, 0, VariableType::UINT16)); // Engine RPM
+    _obd2PIDHandler->RegisterPID(0x0D, new CastMultiplyAndOffset(&CurrentSpeed, 1, 0, VariableType::UINT8)); //Vehicle Speed
+    _obd2PIDHandler->RegisterPID(0x0F, new CastMultiplyAndOffset(&IAT, 1, 40, VariableType::UINT8)); // Intake Air Temperature
+    AbstractOperation* acceleratorPID = new CastMultiplyAndOffset(&AcceleratorPedalPosition, 0.392156863f, 0, VariableType::UINT8);
+    _obd2PIDHandler->RegisterPID(0x11, acceleratorPID); // Accelerator Pedal Position
+    _obd2PIDHandler->RegisterPID(0x12, new Operation_StaticVariable(static_cast<uint8_t>(0x01))); //
+    _obd2PIDHandler->RegisterPID(0x13, new Operation_StaticVariable(static_cast<uint8_t>(0x03))); //
+    _obd2PIDHandler->RegisterPID(0x15, new OperationFunction([](Variable* var) { //
+        uint8_t response[] =  { (uint8_t)(((usec()+300000) % 2000000 > 1000000? 18 : 162) + 4 * slowmovingrandomstandardvalue),
+                                (uint8_t)(128 + 4 * slowmovingrandomstandardvalue) };
+        *var = response;
+    }));
+    _obd2PIDHandler->RegisterPID(0x1C, new Operation_StaticVariable(static_cast<uint8_t>(0x01))); //
+    _obd2PIDHandler->RegisterPID(0x1F, new CastMultiplyAndOffset(&EngineRunElapsedSeconds, 1, 0, VariableType::UINT16)); // Engine Run Time
+    _obd2PIDHandler->RegisterPID(0x21, new Operation_StaticVariable(static_cast<uint16_t>(0))); //
+    _obd2PIDHandler->RegisterPID(0x2C, new Operation_StaticVariable(static_cast<uint8_t>(0))); //
+    _obd2PIDHandler->RegisterPID(0x2D, new Operation_StaticVariable(static_cast<uint8_t>(128))); //
+    _obd2PIDHandler->RegisterPID(0x2E, new Operation_StaticVariable(static_cast<uint8_t>(0))); //
+    //0x30 Warmup Count
+    //0x31 Distance
+    _obd2PIDHandler->RegisterPID(0x33, new CastMultiplyAndOffset(&Baro, 1, 0, VariableType::UINT8)); // Engine Run Time
+    _obd2PIDHandler->RegisterPID(0x34, new OperationFunction([](Variable* var) { //
+        uint16_t o2Current = 0x8000 + (usec() % 2000000 > 1000000? -94 : 111) + 75 * slowmovingrandomstandardvalue;
+        uint16_t o2Equivalence = 32786 + (usec() % 2000000 > 1000000? -141 : 163) + 100 * slowmovingrandomstandardvalue;
+        uint8_t response[] = { (uint8_t)(o2Equivalence >> 8), (uint8_t)o2Equivalence, (uint8_t)(o2Current >> 8), (uint8_t)o2Current};
+        *var = response;
+    }));
+    _obd2PIDHandler->RegisterPID(0x3C, new OperationFunction([](Variable* var) { //
+        uint16_t catTemp = CATTemp != -1337? (CATTemp + 40) * 10 : 700;
+        *var = catTemp;
+    }));
+    _obd2PIDHandler->RegisterPID(0x41, new OperationFunction([](Variable* var) { //
+        uint8_t response[] = {  0x00, 
+                                (uint8_t)(EngineRunElapsedSeconds > 1? 0x07 : 0x37), 
+                                0xFF, 
+                                (uint8_t)(EngineRunElapsedSeconds > 2? (EngineRunElapsedSeconds > 63? (EngineRunElapsedSeconds > 360? 0xFD : 0xFE) : 0xF8) : 0x18) };
+        *var = response;
+    }));
+    _obd2PIDHandler->RegisterPID(0x42, new OperationFunction([](Variable* var) { //
+        *var = static_cast<uint16_t>((EngineRPM > 400? 14387 : 11892) + slowmovingrandomstandardvalue * 30);
+    }));
+    _obd2PIDHandler->RegisterPID(0x44, new Operation_StaticVariable(static_cast<uint16_t>(32768))); // Equivalence Ratio
+    _obd2PIDHandler->RegisterPID(0x45, acceleratorPID); // Accelerator Pedal Position
+    _obd2PIDHandler->RegisterPID(0x47, acceleratorPID); // Accelerator Pedal Position
+    _obd2PIDHandler->RegisterPID(0x48, acceleratorPID); // Accelerator Pedal Position
+    _obd2PIDHandler->RegisterPID(0x49, acceleratorPID); // Accelerator Pedal Position
+    _obd2PIDHandler->RegisterPID(0x4A, acceleratorPID); // Accelerator Pedal Position
+    _obd2PIDHandler->RegisterPID(0x4B, acceleratorPID); // Accelerator Pedal Position
+    _obd2PIDHandler->RegisterPID(0x4C, acceleratorPID); // Accelerator Pedal Position
+    _obd2PIDHandler->RegisterPID(0x4D, new Operation_StaticVariable(static_cast<uint16_t>(0))); //
+    //0x4E DTC Reset
 }
