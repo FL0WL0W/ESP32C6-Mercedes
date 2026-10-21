@@ -532,10 +532,12 @@ extern "C"
             }
         };
 
-        canconfigs[0].g_config.rx_queue_len = 1000;
-        canconfigs[0].g_config.tx_queue_len = 1000;
-        canconfigs[1].g_config.rx_queue_len = 1000;
-        canconfigs[1].g_config.tx_queue_len = 1000;
+        // These queues allocate their full capacity at startup. Keep room for
+        // Wi-Fi/TCP buffers; tx_queue_len also sizes the service's pointer queue.
+        for (auto &canconfig : canconfigs) {
+            canconfig.g_config.rx_queue_len = 128;
+            canconfig.g_config.tx_queue_len = 32;
+        }
         _canService = new Esp32IdfCANService(canconfigs);
         ICommunicationService *broadcastService = _canService->GetISOTPService({.CANIdentifier = 0x7DF, .CANBusNumber = 1 }, {.CANIdentifier = 0x7E8, .CANBusNumber = 1 });
         ICommunicationService *unicastService = _canService->GetISOTPService({.CANIdentifier = 0x7E0, .CANBusNumber = 1 }, {.CANIdentifier = 0x7E8, .CANBusNumber = 1 });
