@@ -2088,7 +2088,7 @@ class CastMultiplyAndOffset : public AbstractOperation {
         float _offset;
         VariableType _type;
     public:
-        CastMultiplyAndOffset(T* ptr, float multiplier, float offset, VariableType type) : AbstractOperation(1, 0), _ptr(ptr), _multiplier(multiplier), _offset(offset), _type(type) {}
+        CastMultiplyAndOffset(T* ptr, float multiplier, float offset, VariableType type) : _ptr(ptr), _multiplier(multiplier), _offset(offset), _type(type) {}
         void AbstractExecute(Variable **variables) override {
             switch(_type) {
                 case VariableType::UINT8:
@@ -2134,7 +2134,7 @@ class OperationFunction : public AbstractOperation {
     private:
         std::function<void(Variable*)> _func;
     public:
-        OperationFunction(std::function<void(Variable*)> func) :  AbstractOperation(1, 0), _func(func) {}
+        OperationFunction(std::function<void(Variable*)> func) :  _func(func) {}
         void AbstractExecute(Variable **variables) override {
             _func(variables[0]);
         }
