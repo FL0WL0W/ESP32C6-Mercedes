@@ -1,0 +1,1 @@
+espefuse.py --chip esp32c6 --port /dev/ttyACM0 burn_efuse UART_PRINT_CONTROL 3
