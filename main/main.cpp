@@ -202,8 +202,10 @@ extern "C"
     }
 
     void *_config = 0;
-    GeneratorMap<Variable> *_variableMap;
+    GeneratorMap<Variable> _variableMap;
     ServiceRegistry _serviceRegistry;
+    OperationFactory _operationFactory;
+    ExpanderMain<&_operationFactory, &_variableMap, &_serviceRegistry> _expanderMain;
     IAnalogService *_analogService;
     IDigitalService *_digitalService;
     IPwmService *_pwmService;
@@ -213,7 +215,6 @@ extern "C"
     CommunicationHandler_OBD2PIDResponder *_obd2PIDHandler;
     ICommunicationService *_communicationService;
     CommunicationHandler_EFIGenie *_efiGenieHandler;
-    ExpanderMain *_expanderMain;
     Variable *loopTime;
     uint32_t prev;
 
@@ -249,25 +250,17 @@ extern "C"
     }
 
     bool expandermain_quit() {
-        if(_expanderMain != 0)
-        {
-            delete _expanderMain;
-            _expanderMain = 0;
-        }
+        _expanderMain.Stop();
         return true;
     }
 
     bool expandermain_start() {
-        if(_expanderMain == 0)
-        {
-            if(!loadConfig())
-                return false;
+        if(!loadConfig())
+            return false;
 
-            size_t configSize = 0;
-            _expanderMain = new ExpanderMain(&_config, configSize, &_serviceRegistry, _variableMap);
+        size_t configSize = 0;
+        _expanderMain.Start(_config, configSize);
 
-            _expanderMain->Setup();
-        }
         return true;
     }
 
@@ -277,26 +270,17 @@ extern "C"
             return;
         if(_config == 0)
             return;
-        _variableMap = new GeneratorMap<Variable>();
 
-        size_t _configSize = 0;
-        _expanderMain = new ExpanderMain(reinterpret_cast<void*>(_config), _configSize, &_serviceRegistry, _variableMap);
+        size_t configSize = 0;
+        _expanderMain.Start(_config, configSize);
 
-        _efiGenieHandler = new CommunicationHandler_EFIGenie(_variableMap, expandermain_write, expandermain_quit, expandermain_start, _config);
+        _efiGenieHandler = new CommunicationHandler_EFIGenie(&_variableMap, expandermain_write, expandermain_quit, expandermain_start, _config);
         // ESP_LOGI("ASDF", "_config %p ", _efiGenieHandler->_config);
         _communicationService->RegisterReceiveCallBack([](communication_send_callback_t send, const void *data, size_t length){ return _efiGenieHandler->Receive(send, data, length);});
-
-        _expanderMain->Setup();
-        loopTime = _variableMap->GenerateValue(250);
     }
     void Loop() 
     {
-        if(_expanderMain != 0) {
-            const tick_t now = _timerService->GetTick();
-            *loopTime = (float)(now-prev) / _timerService->GetTicksPerSecond();
-            prev = now;
-            _expanderMain->Loop();
-        }
+        _expanderMain.Loop();
     }
 
     Esp32IdfAnalogService *_esp32AnalogService;
