@@ -52,72 +52,360 @@
 #include "Esp32IdfCommunicationService_Socket.h"
 #include "Esp32IdfCommunicationService_WebSocket.h"
 
-#define UPDI_UART_RX_PIN 18
-#define UPDI_UART_TX_PIN 14
-
-#define ATTINY_TX 16
-#define ATTINY_RX 17
-
 using namespace OperationArchitecture;
 using namespace EmbeddedIOServices;
 using namespace EmbeddedIOOperations;
 using namespace Esp32;
 using namespace EFIGenie;
 
+#define UPDI_UART_RX_PIN 18
+#define UPDI_UART_TX_PIN 14
+
+#define ATTINY_TX 16
+#define ATTINY_RX 17
+
 ICommunicationService *_uartCommServices[UART_NUM_MAX] = {nullptr};
 
 extern void RegisterCANTasks();
 
-//read UPDI byte
-extern "C" bool UPDI_Read(uint8_t *val)
-{
-    uint8_t timeout = 0;
-    while(UPDI_rx_buffer_length < 1 && timeout++ < 100)
-        vTaskDelay(1);
-    if(timeout > 99){
-        return false;
-    }
-    // ESP_LOGE("UPDI", "read %x %d %d %d", UPDI_rx_buffer[UPDI_rx_buffer_index], UPDI_rx_buffer_index, UPDI_rx_buffer_length, timeout);
-    *val = UPDI_rx_buffer[UPDI_rx_buffer_index++];
-    UPDI_rx_buffer_length--;
-    UPDI_rx_buffer_index %= UPDI_RX_BUFFER_LENGTH;
-    return true;
-}
-
-//write UPDI byte
-extern "C" bool UPDI_Write(uint8_t val)
-{
-    if(UPDI_uart_num >= UART_NUM_MAX || _uartCommServices[UPDI_uart_num] == nullptr)
-        return false;
-    _uartCommServices[UPDI_uart_num]->Send(&val, 1);
-    uint8_t verify;
-    if(!UPDI_Read(&verify))
-        return false;
-    return verify == val;
-}
-
-//UPDI send Break
-extern "C" void UPDI_Break()
-{
-    uint32_t baudrate = 100000;
-
-    uart_wait_tx_done(UPDI_uart_num, pdMS_TO_TICKS(30)); //wait for all bytes to be flushed
-    uart_get_baudrate(UPDI_uart_num, &baudrate);
-    uart_set_baudrate(UPDI_uart_num, 300);
-    UPDI_Write(0);  // send a zero byte
-    uart_wait_tx_done(UPDI_uart_num, pdMS_TO_TICKS(30)); // wait for 0 byte to finish before restore normal baudrate
-    uart_set_baudrate(UPDI_uart_num, baudrate); // set baudrate back to normal after break is sent
-}
-
-extern "C" void UPDI_Idle()
-{
-    uint32_t baudrate = 100000;
-    uart_get_baudrate(UPDI_uart_num, &baudrate);
-    esp_rom_delay_us(15000000/baudrate);
-}
-
 extern "C"
-{   
+{
+    //read UPDI byte
+    bool UPDI_Read(uint8_t *val)
+    {
+        uint8_t timeout = 0;
+        while(UPDI_rx_buffer_length < 1 && timeout++ < 100)
+            vTaskDelay(1);
+        if(timeout > 99){
+            return false;
+        }
+        // ESP_LOGE("UPDI", "read %x %d %d %d", UPDI_rx_buffer[UPDI_rx_buffer_index], UPDI_rx_buffer_index, UPDI_rx_buffer_length, timeout);
+        *val = UPDI_rx_buffer[UPDI_rx_buffer_index++];
+        UPDI_rx_buffer_length--;
+        UPDI_rx_buffer_index %= UPDI_RX_BUFFER_LENGTH;
+        return true;
+    }
+
+    //write UPDI byte
+    bool UPDI_Write(uint8_t val)
+    {
+        if(UPDI_uart_num >= UART_NUM_MAX || _uartCommServices[UPDI_uart_num] == nullptr)
+            return false;
+        _uartCommServices[UPDI_uart_num]->Send(&val, 1);
+        uint8_t verify;
+        if(!UPDI_Read(&verify))
+            return false;
+        return verify == val;
+    }
+
+    //UPDI send Break
+    void UPDI_Break()
+    {
+        uint32_t baudrate = 100000;
+
+        uart_wait_tx_done(UPDI_uart_num, pdMS_TO_TICKS(30)); //wait for all bytes to be flushed
+        uart_get_baudrate(UPDI_uart_num, &baudrate);
+        uart_set_baudrate(UPDI_uart_num, 300);
+        UPDI_Write(0);  // send a zero byte
+        uart_wait_tx_done(UPDI_uart_num, pdMS_TO_TICKS(30)); // wait for 0 byte to finish before restore normal baudrate
+        uart_set_baudrate(UPDI_uart_num, baudrate); // set baudrate back to normal after break is sent
+    }
+
+    void UPDI_Idle()
+    {
+        uint32_t baudrate = 100000;
+        uart_get_baudrate(UPDI_uart_num, &baudrate);
+        esp_rom_delay_us(15000000/baudrate);
+    }
+
+    void UPDI_Enable_Task(void *arg) {
+        vTaskDelay(pdMS_TO_TICKS(100));
+        UPDI_Enable((uart_port_t)1, (gpio_num_t)UPDI_UART_TX_PIN, (gpio_num_t)UPDI_UART_RX_PIN);
+        vTaskDelete(NULL);
+    }
+
+    uint8_t updi_enabled = 0;
+    bool UPDI_RX_Hook(const uint8_t *data, size_t len)
+    {
+        if(updi_enabled != 1) {
+            xTaskCreate(UPDI_Enable_Task, "UPDI_Enable", 4096, 0, 5, NULL);
+        }
+        updi_enabled = 1;
+        return true;
+    }
+
+    void *_config = 0;
+    GeneratorMap<Variable> _variableMap;
+    ServiceRegistry _serviceRegistry;
+    OperationFactory _operationFactory;
+    ExpanderMain<&_operationFactory, &_variableMap, &_serviceRegistry> _expanderMain;
+    Esp32IdfAnalogService _esp32AnalogService;
+    Esp32IdfDigitalService _esp32DigitalService;
+    Esp32IdfPwmService _esp32PwmService;
+    ATTiny427_ExpanderService _attinyExpanderService(ATTiny427_ExpanderComm_UART0);
+    ATTiny427_EVSYSService _attinyEVSYSService(&_attinyExpanderService);
+    ATTiny427_PassthroughService _attinyPassthroughService(&_attinyExpanderService, &_attinyEVSYSService);
+    AnalogService_ATTiny427Expander _attinyAnalogService(&_attinyExpanderService, 0x0F);
+    DigitalService_ATTiny427Expander _attinyDigitalService(&_attinyExpanderService);
+    PwmService_ATTiny427Expander _attinyPwmService(&_attinyExpanderService);
+    AnalogService_Mercedes _analogService(&_esp32AnalogService, &_attinyAnalogService);
+    DigitalService_Mercedes _digitalService(&_esp32DigitalService, &_attinyDigitalService, &_attinyPassthroughService);
+    PwmService_Mercedes _pwmService(&_esp32PwmService, &_attinyPwmService, &_attinyPassthroughService, &_attinyDigitalService);
+    Esp32IdfTimerService _timerService;
+    Esp32IdfCANServiceChannelConfig canconfigs[2] 
+    {
+        {
+            .enabled = true,
+            .t_config = TWAI_TIMING_CONFIG_500KBITS(),
+            .f_config = TWAI_FILTER_CONFIG_ACCEPT_ALL(),
+            .g_config = {
+                .controller_id = 0,
+                .mode = TWAI_MODE_NORMAL, 
+                .tx_io = (gpio_num_t)9, 
+                .rx_io = (gpio_num_t)8,
+                .clkout_io = TWAI_IO_UNUSED, 
+                .bus_off_io = TWAI_IO_UNUSED,
+                .tx_queue_len = 32, 
+                .rx_queue_len = 128,
+                .alerts_enabled = TWAI_ALERT_NONE,  
+                .clkout_divider = 0,
+                .intr_flags = ESP_INTR_FLAG_LEVEL1, 
+                .general_flags = {0}
+            }
+        },
+        {
+            .enabled = true,
+            .t_config = TWAI_TIMING_CONFIG_500KBITS(),
+            .f_config = TWAI_FILTER_CONFIG_ACCEPT_ALL(),
+            .g_config = {
+                .controller_id = 1,
+                .mode = TWAI_MODE_NORMAL, 
+                .tx_io = (gpio_num_t)2, 
+                .rx_io = (gpio_num_t)3,
+                .clkout_io = TWAI_IO_UNUSED, 
+                .bus_off_io = TWAI_IO_UNUSED,
+                .tx_queue_len = 32, 
+                .rx_queue_len = 128,
+                .alerts_enabled = TWAI_ALERT_NONE,  
+                .clkout_divider = 0,
+                .intr_flags = ESP_INTR_FLAG_LEVEL1, 
+                .general_flags = {0}
+            }
+        }
+    };
+    Esp32IdfCANService _canService(canconfigs);
+    ICommunicationService *broadcastService = _canService.GetISOTPService({.CANIdentifier = 0x7DF, .CANBusNumber = 1 }, {.CANIdentifier = 0x7E8, .CANBusNumber = 1 });
+    ICommunicationService *unicastService = _canService.GetISOTPService({.CANIdentifier = 0x7E0, .CANBusNumber = 1 }, {.CANIdentifier = 0x7E8, .CANBusNumber = 1 });
+    AggregateCommunicationService _isotpService((ICommunicationService*[]){broadcastService, unicastService}, 2);
+    CommunicationHandler_OBD2PIDResponder _obd2PIDHandler(&_isotpService);
+    ICommunicationService *_communicationService;
+    CommunicationHandler_EFIGenie *_efiGenieHandler;
+
+    bool loadConfig()
+    {
+        const char * configPath = "/mm/config.bin";
+        FILE *fd = NULL;
+        struct stat file_stat;
+
+        if(stat(configPath, &file_stat) == -1)
+            return false;
+        fd = fopen(configPath, "r");
+        if(!fd)
+            return false;
+        free(_config);
+        _config = malloc(file_stat.st_size);
+        fread(_config, 1, file_stat.st_size, fd);
+        fclose(fd);
+        return true;
+    }
+
+    bool expandermain_write(void *destination, const void *data, size_t length) {
+        if(reinterpret_cast<size_t>(destination) >= 0x20000000 && reinterpret_cast<size_t>(destination) <= 0x2000FA00)
+        {
+            std::memcpy(destination, data, length);
+        }
+        else if(reinterpret_cast<size_t>(destination) >= 0x8004000 && reinterpret_cast<size_t>(destination) <= 0x8008000)
+        {
+            //TODO Write to flash
+        }
+
+        return true;
+    }
+
+    bool expandermain_quit() {
+        _expanderMain.Stop();
+        return true;
+    }
+
+    bool expandermain_start() {
+        if(!loadConfig())
+            return false;
+
+        size_t configSize = 0;
+        _expanderMain.Start(_config, configSize);
+
+        return true;
+    }
+
+    void Setup() 
+    {
+        if(!loadConfig())
+            return;
+        if(_config == 0)
+            return;
+
+        size_t configSize = 0;
+        _expanderMain.Start(_config, configSize);
+
+        _efiGenieHandler = new CommunicationHandler_EFIGenie(&_variableMap, expandermain_write, expandermain_quit, expandermain_start, _config);
+        // ESP_LOGI("ASDF", "_config %p ", _efiGenieHandler->_config);
+        _communicationService->RegisterReceiveCallBack([](communication_send_callback_t send, const void *data, size_t length){ return _efiGenieHandler->Receive(send, data, length);});
+    }
+
+    void Loop() 
+    {
+        _expanderMain.Loop();
+    }
+
+    static wdt_hal_context_t rtc_wdt_ctx = RWDT_HAL_CONTEXT_DEFAULT();
+    
+    TaskHandle_t loop_task_handle = NULL;
+    UBaseType_t loop_original_priority = 0;
+    void IRAM_ATTR priority_restore_timer_callback()
+    {
+        vTaskPrioritySet(loop_task_handle, loop_original_priority);
+    }
+
+    uint32_t transactionCount = 0;
+    void IRAM_ATTR loop(void *parameters)
+    {
+        Setup();
+
+        // Store the app_main task handle and priority
+        loop_task_handle = xTaskGetCurrentTaskHandle();
+        loop_original_priority = uxTaskPriorityGet(loop_task_handle);
+
+        const tick_t timerTicksPerSecond = _timerService.GetTicksPerSecond();
+        Task *priority_restore_task = new Task(priority_restore_timer_callback, false);
+        tick_t averageTick = timerTicksPerSecond / 1000;
+        tick_t minTick = averageTick * 100;
+        tick_t maxTick = 0;
+        tick_t lastTick = _timerService.GetTick();
+        int loopcnt = 0;
+        while (1)
+        {
+            // Start timer to restore priority after 1 tick, then set app_main to the lowest priority and yield
+            // _timerService->ScheduleTask(priority_restore_task, _timerService->GetTick() + timerTicksPerSecond / 1000);
+            // vTaskPrioritySet(loop_task_handle, 0);
+            // taskYIELD();
+            vTaskDelay(1);
+
+            Loop();
+
+            if (wdt_hal_is_enabled(&rtc_wdt_ctx)) {
+                wdt_hal_write_protect_disable(&rtc_wdt_ctx);
+                wdt_hal_feed(&rtc_wdt_ctx);
+                wdt_hal_write_protect_enable(&rtc_wdt_ctx);
+            }
+            const tick_t tickDelta = _timerService.GetTick() - lastTick;
+            averageTick = (averageTick * 99 + (tickDelta)) / 100;
+            if(tickDelta < minTick)
+            {
+                minTick = tickDelta;
+            }
+            if(tickDelta > maxTick)
+            {
+                maxTick = tickDelta;
+            }
+            loopcnt++;
+            if(loopcnt % 1000 == 0)
+            {
+                ESP_LOGI("MainLoop", "transaction: %d", transactionCount);
+            }
+            lastTick = _timerService.GetTick();
+        }
+    }
+
+    static QueueHandle_t uart0_queue;
+    uint8_t uart0_buffer[256];
+    bool attinyStarted = false;
+
+    static void uart_event_task(void *pvParameters)
+    {
+        uart_event_t event;
+        for (;;) 
+        {
+            //Waiting for UART event.
+            if (xQueueReceive(uart0_queue, (void *)&event, (TickType_t)portMAX_DELAY)) 
+            {
+                switch (event.type) 
+                {
+                case UART_DATA:
+                    bzero(uart0_buffer, 256);
+                    uart_read_bytes(UART_NUM_0, uart0_buffer, event.size, portMAX_DELAY);
+                    if(!attinyStarted)
+                        break;
+                    _attinyExpanderService.Receive(uart0_buffer, event.size);
+                    if(!_attinyExpanderService.WaitingForResponse())
+                    {
+                        bzero(uart0_buffer, 256);
+                        const size_t tx_size = _attinyExpanderService.Transmit(uart0_buffer);
+		                ESP_ERROR_CHECK(uart_set_rx_full_threshold(UART_NUM_0, tx_size));
+                        uart_write_bytes(UART_NUM_0, uart0_buffer, tx_size);
+                        transactionCount++;
+                    }
+                    break;
+                default:
+                    break;
+                }
+            }
+        }
+        vTaskDelete(NULL);
+    }
+
+    void installAttiny427UART() {
+
+        //setup interrupt based uart receive
+        ESP_ERROR_CHECK(uart_driver_install(UART_NUM_0, 256, 256, 10, &uart0_queue, 0));
+
+        uart_config_t uart_config = {
+            .baud_rate = 1000000,
+            .data_bits = UART_DATA_8_BITS,
+            .parity = UART_PARITY_DISABLE,
+            .stop_bits = UART_STOP_BITS_1,
+            .flow_ctrl = UART_HW_FLOWCTRL_DISABLE,
+            .source_clk = UART_SCLK_DEFAULT,
+        };
+        // Configure UART parameters
+        ESP_ERROR_CHECK(uart_param_config(UART_NUM_0, &uart_config));
+		ESP_ERROR_CHECK(uart_set_rx_full_threshold(UART_NUM_0, 1));
+        // Set UART pins
+        ESP_ERROR_CHECK(gpio_set_drive_capability((gpio_num_t)ATTINY_TX, GPIO_DRIVE_CAP_3));
+        ESP_ERROR_CHECK(uart_set_pin(UART_NUM_0, ATTINY_TX, ATTINY_RX, UART_PIN_NO_CHANGE, UART_PIN_NO_CHANGE));
+        
+        xTaskCreate(uart_event_task, "uart_event_task", 3072, NULL, 12, NULL);
+
+        attinyStarted = true;
+        const size_t tx_size = _attinyExpanderService.Transmit(uart0_buffer);
+		ESP_ERROR_CHECK(uart_set_rx_full_threshold(UART_NUM_0, tx_size));
+        uart_write_bytes(UART_NUM_0, uart0_buffer, tx_size);
+        transactionCount++;
+    }
+
+    void IRAM_ATTR wdthitter(void *parameters)
+    {
+        while (true)
+        {
+            vTaskDelay(1000);
+
+            if (wdt_hal_is_enabled(&rtc_wdt_ctx)) {
+                wdt_hal_write_protect_disable(&rtc_wdt_ctx);
+                wdt_hal_feed(&rtc_wdt_ctx);
+                wdt_hal_write_protect_enable(&rtc_wdt_ctx);
+            }
+        }
+    }
+
     #define NVS_WIFI_NAMESPACE "wifi_config"
     #define NVS_WIFI_SSID_KEY "ssid"
     #define NVS_WIFI_PASSWORD_KEY "password"
@@ -185,256 +473,6 @@ extern "C"
         ESP_ERROR_CHECK(esp_wifi_start());
     }
 
-    void UPDI_Enable_Task(void *arg) {
-        vTaskDelay(pdMS_TO_TICKS(100));
-        UPDI_Enable((uart_port_t)1, (gpio_num_t)UPDI_UART_TX_PIN, (gpio_num_t)UPDI_UART_RX_PIN);
-        vTaskDelete(NULL);
-    }
-
-    uint8_t updi_enabled = 0;
-    bool UPDI_RX_Hook(const uint8_t *data, size_t len)
-    {
-        if(updi_enabled != 1) {
-            xTaskCreate(UPDI_Enable_Task, "UPDI_Enable", 4096, 0, 5, NULL);
-        }
-        updi_enabled = 1;
-        return true;
-    }
-
-    void *_config = 0;
-    GeneratorMap<Variable> _variableMap;
-    ServiceRegistry _serviceRegistry;
-    OperationFactory _operationFactory;
-    ExpanderMain<&_operationFactory, &_variableMap, &_serviceRegistry> _expanderMain;
-    IAnalogService *_analogService;
-    IDigitalService *_digitalService;
-    IPwmService *_pwmService;
-    ITimerService *_timerService;
-    ICANService *_canService;
-    ICommunicationService *_isotpService;
-    CommunicationHandler_OBD2PIDResponder *_obd2PIDHandler;
-    ICommunicationService *_communicationService;
-    CommunicationHandler_EFIGenie *_efiGenieHandler;
-    Variable *loopTime;
-    uint32_t prev;
-
-    bool loadConfig()
-    {
-        const char * configPath = "/mm/config.bin";
-        FILE *fd = NULL;
-        struct stat file_stat;
-
-        if(stat(configPath, &file_stat) == -1)
-            return false;
-        fd = fopen(configPath, "r");
-        if(!fd)
-            return false;
-        free(_config);
-        _config = malloc(file_stat.st_size);
-        fread(_config, 1, file_stat.st_size, fd);
-        fclose(fd);
-        return true;
-    }
-
-    bool expandermain_write(void *destination, const void *data, size_t length) {
-        if(reinterpret_cast<size_t>(destination) >= 0x20000000 && reinterpret_cast<size_t>(destination) <= 0x2000FA00)
-        {
-            std::memcpy(destination, data, length);
-        }
-        else if(reinterpret_cast<size_t>(destination) >= 0x8004000 && reinterpret_cast<size_t>(destination) <= 0x8008000)
-        {
-            //TODO Write to flash
-        }
-
-        return true;
-    }
-
-    bool expandermain_quit() {
-        _expanderMain.Stop();
-        return true;
-    }
-
-    bool expandermain_start() {
-        if(!loadConfig())
-            return false;
-
-        size_t configSize = 0;
-        _expanderMain.Start(_config, configSize);
-
-        return true;
-    }
-
-    void Setup() 
-    {
-        if(!loadConfig())
-            return;
-        if(_config == 0)
-            return;
-
-        size_t configSize = 0;
-        _expanderMain.Start(_config, configSize);
-
-        _efiGenieHandler = new CommunicationHandler_EFIGenie(&_variableMap, expandermain_write, expandermain_quit, expandermain_start, _config);
-        // ESP_LOGI("ASDF", "_config %p ", _efiGenieHandler->_config);
-        _communicationService->RegisterReceiveCallBack([](communication_send_callback_t send, const void *data, size_t length){ return _efiGenieHandler->Receive(send, data, length);});
-    }
-    void Loop() 
-    {
-        _expanderMain.Loop();
-    }
-
-    Esp32IdfAnalogService *_esp32AnalogService;
-    Esp32IdfDigitalService *_esp32DigitalService;
-    Esp32IdfPwmService *_esp32PwmService;
-
-    ATTiny427_ExpanderService *_attinyExpanderService;
-    ATTiny427_PassthroughService *_attinyPassthroughService;
-    ATTiny427_EVSYSService *_attinyEVSYSService;
-    AnalogService_ATTiny427Expander *_attinyAnalogService;
-    DigitalService_ATTiny427Expander *_attinyDigitalService;
-    PwmService_ATTiny427Expander *_attinyPwmService;
-
-    uint32_t transactionCount = 0;
-
-    static wdt_hal_context_t rtc_wdt_ctx = RWDT_HAL_CONTEXT_DEFAULT();
-    
-    TaskHandle_t loop_task_handle = NULL;
-    UBaseType_t loop_original_priority = 0;
-
-    void IRAM_ATTR priority_restore_timer_callback()
-    {
-        vTaskPrioritySet(loop_task_handle, loop_original_priority);
-    }
-
-    void IRAM_ATTR loop(void *parameters)
-    {
-        // Store the app_main task handle and priority
-        loop_task_handle = xTaskGetCurrentTaskHandle();
-        loop_original_priority = uxTaskPriorityGet(loop_task_handle);
-
-        const tick_t timerTicksPerSecond = _timerService->GetTicksPerSecond();
-        Task *priority_restore_task = new Task(priority_restore_timer_callback, false);
-        tick_t averageTick = timerTicksPerSecond / 1000;
-        tick_t minTick = averageTick * 100;
-        tick_t maxTick = 0;
-        tick_t lastTick = _timerService->GetTick();
-        int loopcnt = 0;
-        while (1)
-        {
-            // Start timer to restore priority after 1 tick, then set app_main to the lowest priority and yield
-            // _timerService->ScheduleTask(priority_restore_task, _timerService->GetTick() + timerTicksPerSecond / 1000);
-            // vTaskPrioritySet(loop_task_handle, 0);
-            // taskYIELD();
-            vTaskDelay(1);
-
-            Loop();
-
-            if (wdt_hal_is_enabled(&rtc_wdt_ctx)) {
-                wdt_hal_write_protect_disable(&rtc_wdt_ctx);
-                wdt_hal_feed(&rtc_wdt_ctx);
-                wdt_hal_write_protect_enable(&rtc_wdt_ctx);
-            }
-            const tick_t tickDelta = _timerService->GetTick() - lastTick;
-            averageTick = (averageTick * 99 + (tickDelta)) / 100;
-            if(tickDelta < minTick)
-            {
-                minTick = tickDelta;
-            }
-            if(tickDelta > maxTick)
-            {
-                maxTick = tickDelta;
-            }
-            loopcnt++;
-            if(loopcnt % 1000 == 0)
-            {
-                ESP_LOGI("MainLoop", "transaction: %d", transactionCount);
-            }
-            lastTick = _timerService->GetTick();
-        }
-    }
-
-    void IRAM_ATTR wdthitter(void *parameters)
-    {
-        while (true)
-        {
-            vTaskDelay(1000);
-
-            if (wdt_hal_is_enabled(&rtc_wdt_ctx)) {
-                wdt_hal_write_protect_disable(&rtc_wdt_ctx);
-                wdt_hal_feed(&rtc_wdt_ctx);
-                wdt_hal_write_protect_enable(&rtc_wdt_ctx);
-            }
-        }
-    }
-
-    TaskHandle_t wdthitter_task_handle = NULL;
-
-    static QueueHandle_t uart0_queue;
-    uint8_t uart0_buffer[256];
-    bool attinyStarted = false;
-
-    static void uart_event_task(void *pvParameters)
-    {
-        uart_event_t event;
-        for (;;) 
-        {
-            //Waiting for UART event.
-            if (xQueueReceive(uart0_queue, (void *)&event, (TickType_t)portMAX_DELAY)) 
-            {
-                switch (event.type) 
-                {
-                case UART_DATA:
-                    bzero(uart0_buffer, 256);
-                    uart_read_bytes(UART_NUM_0, uart0_buffer, event.size, portMAX_DELAY);
-                    if(!attinyStarted)
-                        break;
-                    _attinyExpanderService->Receive(uart0_buffer, event.size);
-                    if(!_attinyExpanderService->WaitingForResponse())
-                    {
-                        bzero(uart0_buffer, 256);
-                        const size_t tx_size = _attinyExpanderService->Transmit(uart0_buffer);
-		                ESP_ERROR_CHECK(uart_set_rx_full_threshold(UART_NUM_0, tx_size));
-                        uart_write_bytes(UART_NUM_0, uart0_buffer, tx_size);
-                        transactionCount++;
-                    }
-                    break;
-                default:
-                    break;
-                }
-            }
-        }
-        vTaskDelete(NULL);
-    }
-
-    void installAttiny427UART() {
-
-        //setup interrupt based uart receive
-        ESP_ERROR_CHECK(uart_driver_install(UART_NUM_0, 256, 256, 10, &uart0_queue, 0));
-
-        uart_config_t uart_config = {
-            .baud_rate = 1000000,
-            .data_bits = UART_DATA_8_BITS,
-            .parity = UART_PARITY_DISABLE,
-            .stop_bits = UART_STOP_BITS_1,
-            .flow_ctrl = UART_HW_FLOWCTRL_DISABLE,
-            .source_clk = UART_SCLK_DEFAULT,
-        };
-        // Configure UART parameters
-        ESP_ERROR_CHECK(uart_param_config(UART_NUM_0, &uart_config));
-		ESP_ERROR_CHECK(uart_set_rx_full_threshold(UART_NUM_0, 1));
-        // Set UART pins
-        ESP_ERROR_CHECK(gpio_set_drive_capability((gpio_num_t)ATTINY_TX, GPIO_DRIVE_CAP_3));
-        ESP_ERROR_CHECK(uart_set_pin(UART_NUM_0, ATTINY_TX, ATTINY_RX, UART_PIN_NO_CHANGE, UART_PIN_NO_CHANGE));
-        
-        xTaskCreate(uart_event_task, "uart_event_task", 3072, NULL, 12, NULL);
-
-        attinyStarted = true;
-        const size_t tx_size = _attinyExpanderService->Transmit(uart0_buffer);
-		ESP_ERROR_CHECK(uart_set_rx_full_threshold(UART_NUM_0, tx_size));
-        uart_write_bytes(UART_NUM_0, uart0_buffer, tx_size);
-        transactionCount++;
-    }
-
     void app_main()
     {
         //Initialize NVS
@@ -457,77 +495,18 @@ extern "C"
         {
             _uartCommServices[i] = new Esp32IdfCommunicationService_UART((uart_port_t)i, 2048);
         }
-        
-        // uart_config_t UPDI_uart_config = {
-        //     .baud_rate = 100000,
-        //     .data_bits = UART_DATA_8_BITS,
-        //     .parity    = UART_PARITY_EVEN,
-        //     .stop_bits = UART_STOP_BITS_2, 
-        //     .flow_ctrl = UART_HW_FLOWCTRL_DISABLE,
-        //     .source_clk = UART_SCLK_DEFAULT,
-        // };
-        
-        // vTaskDelay(pdMS_TO_TICKS(1000));
-        // size_t attinyload_bytes = attinyload_end - attinyload_start;
-        // uint8_t *attinyload = (uint8_t *)calloc(attinyload_bytes, sizeof(uint8_t));
-        // memcpy(attinyload, attinyload_start, attinyload_bytes);
-        // UPDI_Program(1, 4, 5, attinyload, attinyload_bytes);
-        
-        // xTaskCreate(echo_task, "echo_task", 2048, NULL, 10, NULL);
-
-        _esp32AnalogService = new Esp32IdfAnalogService();
-        _esp32DigitalService = new Esp32IdfDigitalService();
-        _esp32PwmService = new Esp32IdfPwmService();
-
-        _attinyExpanderService = new ATTiny427_ExpanderService(ATTiny427_ExpanderComm_UART0);
-        _attinyDigitalService = new DigitalService_ATTiny427Expander(_attinyExpanderService);
-        _attinyAnalogService = new AnalogService_ATTiny427Expander(_attinyExpanderService, 0x0F);
-        _attinyPwmService = new PwmService_ATTiny427Expander(_attinyExpanderService);
-        _attinyEVSYSService = new ATTiny427_EVSYSService(_attinyExpanderService);
-        _attinyPassthroughService = new ATTiny427_PassthroughService(_attinyExpanderService, _attinyEVSYSService);
 
         installAttiny427UART();
 
-        _analogService = new AnalogService_Mercedes(_esp32AnalogService, _attinyAnalogService);
-        _digitalService = new DigitalService_Mercedes(_esp32DigitalService, _attinyDigitalService, _attinyPassthroughService);
-        _pwmService = new PwmService_Mercedes(_esp32PwmService, _attinyPwmService, _attinyPassthroughService, _attinyDigitalService);
-        _timerService = new Esp32IdfTimerService();
-        _serviceRegistry.Register<IAnalogService>(_analogService);
-        _serviceRegistry.Register<IDigitalService>(_digitalService);
-        _serviceRegistry.Register<IPwmService>(_pwmService);
-        _serviceRegistry.Register<ITimerService>(_timerService);
+        _serviceRegistry.Register<IAnalogService>(&_analogService);
+        _serviceRegistry.Register<IDigitalService>(&_digitalService);
+        _serviceRegistry.Register<IPwmService>(&_pwmService);
+        _serviceRegistry.Register<ITimerService>(&_timerService);
+        _serviceRegistry.Register<ICANService>(&_canService);
 
         // mount_sd("/SD");
         start_http_server();
 
-        static Esp32IdfCANServiceChannelConfig canconfigs[2] 
-        {
-            {
-                .enabled = true,
-                .t_config = TWAI_TIMING_CONFIG_500KBITS(),
-                .f_config = TWAI_FILTER_CONFIG_ACCEPT_ALL(),
-                .g_config = TWAI_GENERAL_CONFIG_DEFAULT_V2(0, (gpio_num_t)9, (gpio_num_t)8, TWAI_MODE_NORMAL)
-            },
-            {
-                .enabled = true,
-                .t_config = TWAI_TIMING_CONFIG_500KBITS(),
-                .f_config = TWAI_FILTER_CONFIG_ACCEPT_ALL(),
-                .g_config = TWAI_GENERAL_CONFIG_DEFAULT_V2(1, (gpio_num_t)2, (gpio_num_t)3, TWAI_MODE_NORMAL)
-            }
-        };
-
-        // These queues allocate their full capacity at startup. Keep room for
-        // Wi-Fi/TCP buffers; tx_queue_len also sizes the service's pointer queue.
-        for (auto &canconfig : canconfigs) {
-            canconfig.g_config.rx_queue_len = 128;
-            canconfig.g_config.tx_queue_len = 32;
-        }
-        _canService = new Esp32IdfCANService(canconfigs);
-        ICommunicationService *broadcastService = _canService->GetISOTPService({.CANIdentifier = 0x7DF, .CANBusNumber = 1 }, {.CANIdentifier = 0x7E8, .CANBusNumber = 1 });
-        ICommunicationService *unicastService = _canService->GetISOTPService({.CANIdentifier = 0x7E0, .CANBusNumber = 1 }, {.CANIdentifier = 0x7E8, .CANBusNumber = 1 });
-        _isotpService = new AggregateCommunicationService((ICommunicationService*[]){broadcastService, unicastService}, 2);
-        _obd2PIDHandler = new CommunicationHandler_OBD2PIDResponder(_isotpService);
-        _serviceRegistry.Register<ICANService>(_canService);
         _communicationService = new Esp32IdfCommunicationService_WebSocket(server, "/EFIGenieCommunication");
 
 		const httpd_uri_t resetPost = {
@@ -540,7 +519,6 @@ extern "C"
 				return ESP_OK;
 			}
 		};
-
         httpd_register_uri_handler(server, &resetPost);
 
 		const httpd_uri_t resetToOTAUpdaterPost = {
@@ -569,17 +547,14 @@ extern "C"
 				return ESP_OK;
 			}
 		};
-
         httpd_register_uri_handler(server, &resetToOTAUpdaterPost);
 
+
+        TaskHandle_t wdthitter_task_handle = NULL;
         xTaskCreate(wdthitter, "wdthitter", 4096, NULL, 1, &wdthitter_task_handle);
         mount_mmrofs("/mm");
-        // mount_spiffs("/mm");
         register_file_handler_http_server("/mm");
-        //end wdthitter task
         vTaskDelete(wdthitter_task_handle);
-
-        Setup();
 
         //create task for loop with max priority
         xTaskCreate(loop, "loop_task", 4096, NULL, configMAX_PRIORITIES - 1, NULL);

@@ -513,7 +513,7 @@ bool VehicleStabilityEnhancementSystemActive = false;
 
 extern ICANService *_canService;
 extern ICommunicationService *_isotpService;
-extern CommunicationHandler_OBD2PIDResponder *_obd2PIDHandler;
+extern CommunicationHandler_OBD2PIDResponder _obd2PIDHandler;
 extern IDigitalService *_digitalService;
 
 void SendCan1(twai_message_t *message) {
@@ -2187,68 +2187,68 @@ void RegisterCANTasks() {
     _canService->RegisterReceiveCallBack({.CANIdentifier = 0x2E5, .CANBusNumber = 1 },MercedesCanRX2E5);
 
     _isotpService->RegisterReceiveCallBack(ParseOBD2);
-    _obd2PIDHandler->RegisterPID(0x01, new Operation_StaticVariable(static_cast<uint32_t>(0x0007FD00))); //DTC
-    _obd2PIDHandler->RegisterPID(0x02, new Operation_StaticVariable(static_cast<uint16_t>(0x0000))); //Freeze Frame DTC
-    _obd2PIDHandler->RegisterPID(0x03, new Operation_StaticVariable(static_cast<uint16_t>(0x0202))); //Fuel System Status
-    _obd2PIDHandler->RegisterPID(0x05, new CastMultiplyAndOffset(&CLT, 1, 40, VariableType::UINT8)); //Coolant Temperature
-    _obd2PIDHandler->RegisterPID(0x06, new OperationFunction([](Variable* var) { //
+    _obd2PIDHandler.RegisterPID(0x01, new Operation_StaticVariable(static_cast<uint32_t>(0x0007FD00))); //DTC
+    _obd2PIDHandler.RegisterPID(0x02, new Operation_StaticVariable(static_cast<uint16_t>(0x0000))); //Freeze Frame DTC
+    _obd2PIDHandler.RegisterPID(0x03, new Operation_StaticVariable(static_cast<uint16_t>(0x0202))); //Fuel System Status
+    _obd2PIDHandler.RegisterPID(0x05, new CastMultiplyAndOffset(&CLT, 1, 40, VariableType::UINT8)); //Coolant Temperature
+    _obd2PIDHandler.RegisterPID(0x06, new OperationFunction([](Variable* var) { //
         *var = static_cast<uint8_t>(128 + 4 * slowmovingrandomstandardvalue);
     })); 
-    _obd2PIDHandler->RegisterPID(0x07, new OperationFunction([](Variable* var) { //
+    _obd2PIDHandler.RegisterPID(0x07, new OperationFunction([](Variable* var) { //
         if(snap == 1337)
             snap = slowmovingrandomstandardvalue;
         *var = static_cast<uint8_t>(128 + 4 * snap);
     }));
-    _obd2PIDHandler->RegisterPID(0x0A, new CastMultiplyAndOffset(&FuelPressure, 33, 0, VariableType::UINT8)); //Fuel Pressure
-    _obd2PIDHandler->RegisterPID(0x0C, new CastMultiplyAndOffset(&EngineRPM, 4, 0, VariableType::UINT16)); // Engine RPM
-    _obd2PIDHandler->RegisterPID(0x0D, new CastMultiplyAndOffset(&CurrentSpeed, 1, 0, VariableType::UINT8)); //Vehicle Speed
-    _obd2PIDHandler->RegisterPID(0x0F, new CastMultiplyAndOffset(&IAT, 1, 40, VariableType::UINT8)); // Intake Air Temperature
+    _obd2PIDHandler.RegisterPID(0x0A, new CastMultiplyAndOffset(&FuelPressure, 33, 0, VariableType::UINT8)); //Fuel Pressure
+    _obd2PIDHandler.RegisterPID(0x0C, new CastMultiplyAndOffset(&EngineRPM, 4, 0, VariableType::UINT16)); // Engine RPM
+    _obd2PIDHandler.RegisterPID(0x0D, new CastMultiplyAndOffset(&CurrentSpeed, 1, 0, VariableType::UINT8)); //Vehicle Speed
+    _obd2PIDHandler.RegisterPID(0x0F, new CastMultiplyAndOffset(&IAT, 1, 40, VariableType::UINT8)); // Intake Air Temperature
     AbstractOperation* acceleratorPID = new CastMultiplyAndOffset(&AcceleratorPedalPosition, 0.392156863f, 0, VariableType::UINT8);
-    _obd2PIDHandler->RegisterPID(0x11, acceleratorPID); // Accelerator Pedal Position
-    _obd2PIDHandler->RegisterPID(0x12, new Operation_StaticVariable(static_cast<uint8_t>(0x01))); //
-    _obd2PIDHandler->RegisterPID(0x13, new Operation_StaticVariable(static_cast<uint8_t>(0x03))); //
-    _obd2PIDHandler->RegisterPID(0x15, new OperationFunction([](Variable* var) { //
+    _obd2PIDHandler.RegisterPID(0x11, acceleratorPID); // Accelerator Pedal Position
+    _obd2PIDHandler.RegisterPID(0x12, new Operation_StaticVariable(static_cast<uint8_t>(0x01))); //
+    _obd2PIDHandler.RegisterPID(0x13, new Operation_StaticVariable(static_cast<uint8_t>(0x03))); //
+    _obd2PIDHandler.RegisterPID(0x15, new OperationFunction([](Variable* var) { //
         uint8_t response[] =  { (uint8_t)(((usec()+300000) % 2000000 > 1000000? 18 : 162) + 4 * slowmovingrandomstandardvalue),
                                 (uint8_t)(128 + 4 * slowmovingrandomstandardvalue) };
         *var = response;
     }));
-    _obd2PIDHandler->RegisterPID(0x1C, new Operation_StaticVariable(static_cast<uint8_t>(0x01))); //
-    _obd2PIDHandler->RegisterPID(0x1F, new CastMultiplyAndOffset(&EngineRunElapsedSeconds, 1, 0, VariableType::UINT16)); // Engine Run Time
-    _obd2PIDHandler->RegisterPID(0x21, new Operation_StaticVariable(static_cast<uint16_t>(0))); //
-    _obd2PIDHandler->RegisterPID(0x2C, new Operation_StaticVariable(static_cast<uint8_t>(0))); //
-    _obd2PIDHandler->RegisterPID(0x2D, new Operation_StaticVariable(static_cast<uint8_t>(128))); //
-    _obd2PIDHandler->RegisterPID(0x2E, new Operation_StaticVariable(static_cast<uint8_t>(0))); //
+    _obd2PIDHandler.RegisterPID(0x1C, new Operation_StaticVariable(static_cast<uint8_t>(0x01))); //
+    _obd2PIDHandler.RegisterPID(0x1F, new CastMultiplyAndOffset(&EngineRunElapsedSeconds, 1, 0, VariableType::UINT16)); // Engine Run Time
+    _obd2PIDHandler.RegisterPID(0x21, new Operation_StaticVariable(static_cast<uint16_t>(0))); //
+    _obd2PIDHandler.RegisterPID(0x2C, new Operation_StaticVariable(static_cast<uint8_t>(0))); //
+    _obd2PIDHandler.RegisterPID(0x2D, new Operation_StaticVariable(static_cast<uint8_t>(128))); //
+    _obd2PIDHandler.RegisterPID(0x2E, new Operation_StaticVariable(static_cast<uint8_t>(0))); //
     //0x30 Warmup Count
     //0x31 Distance
-    _obd2PIDHandler->RegisterPID(0x33, new CastMultiplyAndOffset(&Baro, 1, 0, VariableType::UINT8)); // Engine Run Time
-    _obd2PIDHandler->RegisterPID(0x34, new OperationFunction([](Variable* var) { //
+    _obd2PIDHandler.RegisterPID(0x33, new CastMultiplyAndOffset(&Baro, 1, 0, VariableType::UINT8)); // Engine Run Time
+    _obd2PIDHandler.RegisterPID(0x34, new OperationFunction([](Variable* var) { //
         uint16_t o2Current = 0x8000 + (usec() % 2000000 > 1000000? -94 : 111) + 75 * slowmovingrandomstandardvalue;
         uint16_t o2Equivalence = 32786 + (usec() % 2000000 > 1000000? -141 : 163) + 100 * slowmovingrandomstandardvalue;
         uint8_t response[] = { (uint8_t)(o2Equivalence >> 8), (uint8_t)o2Equivalence, (uint8_t)(o2Current >> 8), (uint8_t)o2Current};
         *var = response;
     }));
-    _obd2PIDHandler->RegisterPID(0x3C, new OperationFunction([](Variable* var) { //
+    _obd2PIDHandler.RegisterPID(0x3C, new OperationFunction([](Variable* var) { //
         uint16_t catTemp = CATTemp != -1337? (CATTemp + 40) * 10 : 700;
         *var = catTemp;
     }));
-    _obd2PIDHandler->RegisterPID(0x41, new OperationFunction([](Variable* var) { //
+    _obd2PIDHandler.RegisterPID(0x41, new OperationFunction([](Variable* var) { //
         uint8_t response[] = {  0x00, 
                                 (uint8_t)(EngineRunElapsedSeconds > 1? 0x07 : 0x37), 
                                 0xFF, 
                                 (uint8_t)(EngineRunElapsedSeconds > 2? (EngineRunElapsedSeconds > 63? (EngineRunElapsedSeconds > 360? 0xFD : 0xFE) : 0xF8) : 0x18) };
         *var = response;
     }));
-    _obd2PIDHandler->RegisterPID(0x42, new OperationFunction([](Variable* var) { //
+    _obd2PIDHandler.RegisterPID(0x42, new OperationFunction([](Variable* var) { //
         *var = static_cast<uint16_t>((EngineRPM > 400? 14387 : 11892) + slowmovingrandomstandardvalue * 30);
     }));
-    _obd2PIDHandler->RegisterPID(0x44, new Operation_StaticVariable(static_cast<uint16_t>(32768))); // Equivalence Ratio
-    _obd2PIDHandler->RegisterPID(0x45, acceleratorPID); // Accelerator Pedal Position
-    _obd2PIDHandler->RegisterPID(0x47, acceleratorPID); // Accelerator Pedal Position
-    _obd2PIDHandler->RegisterPID(0x48, acceleratorPID); // Accelerator Pedal Position
-    _obd2PIDHandler->RegisterPID(0x49, acceleratorPID); // Accelerator Pedal Position
-    _obd2PIDHandler->RegisterPID(0x4A, acceleratorPID); // Accelerator Pedal Position
-    _obd2PIDHandler->RegisterPID(0x4B, acceleratorPID); // Accelerator Pedal Position
-    _obd2PIDHandler->RegisterPID(0x4C, acceleratorPID); // Accelerator Pedal Position
-    _obd2PIDHandler->RegisterPID(0x4D, new Operation_StaticVariable(static_cast<uint16_t>(0))); //
+    _obd2PIDHandler.RegisterPID(0x44, new Operation_StaticVariable(static_cast<uint16_t>(32768))); // Equivalence Ratio
+    _obd2PIDHandler.RegisterPID(0x45, acceleratorPID); // Accelerator Pedal Position
+    _obd2PIDHandler.RegisterPID(0x47, acceleratorPID); // Accelerator Pedal Position
+    _obd2PIDHandler.RegisterPID(0x48, acceleratorPID); // Accelerator Pedal Position
+    _obd2PIDHandler.RegisterPID(0x49, acceleratorPID); // Accelerator Pedal Position
+    _obd2PIDHandler.RegisterPID(0x4A, acceleratorPID); // Accelerator Pedal Position
+    _obd2PIDHandler.RegisterPID(0x4B, acceleratorPID); // Accelerator Pedal Position
+    _obd2PIDHandler.RegisterPID(0x4C, acceleratorPID); // Accelerator Pedal Position
+    _obd2PIDHandler.RegisterPID(0x4D, new Operation_StaticVariable(static_cast<uint16_t>(0))); //
     //0x4E DTC Reset
 }
