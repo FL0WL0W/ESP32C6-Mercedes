@@ -22,7 +22,11 @@
 #include "ICommunicationService.h"
 #include "CommunicationHandlers/CommunicationHandler_OBD2PIDResponder.h"
 #include "Operations/Operation_StaticVariable.h"
+#include "Esp32IdfCANService.h"
+#include "AggregateCommunicationService.h"
+#include "DigitalService_Mercedes.h"
 
+using namespace Esp32;
 using namespace EmbeddedIOServices;
 using namespace OperationArchitecture;
 using namespace EFIGenie;
@@ -511,42 +515,45 @@ bool TractionControlSystemActive = false;
 bool AntiLockBrakeSystemActive = false;
 bool VehicleStabilityEnhancementSystemActive = false;
 
-extern ICANService *_canService;
-extern ICommunicationService *_isotpService;
+extern Esp32IdfCANService _canService;
+extern AggregateCommunicationService _isotpService;
 extern CommunicationHandler_OBD2PIDResponder _obd2PIDHandler;
-extern IDigitalService *_digitalService;
+extern DigitalService_Mercedes _digitalService;
 
 void SendCan1(twai_message_t *message) {
     CANIdentifier_t identifier{.CANIdentifier = message->identifier, .CANBusNumber = 0};
     CANData_t data;
     memcpy(data.Data, message->data, message->data_length_code);
-    _canService->Send(identifier, data, message->data_length_code);
+    _canService.Send(identifier, data, message->data_length_code);
 }
 void SendCan2(twai_message_t *message) {
     CANIdentifier_t identifier{.CANIdentifier = message->identifier, .CANBusNumber = 1};
     CANData_t data;
     memcpy(data.Data, message->data, message->data_length_code);
-    _canService->Send(identifier, data, message->data_length_code);
+    _canService.Send(identifier, data, message->data_length_code);
 }
 
-uint8_t crcJ1850Table[256];
-void CRCJ1850Init(void) {
-        uint8_t _crc;
-        for (int i = 0; i < 0x100; i++) {
-                _crc = i;
-
-                for (uint8_t bit = 0; bit < 8; bit++) _crc = (_crc & 0x80) ? ((_crc << 1) ^ 0x1D) : (_crc << 1);
-
-                crcJ1850Table[i] = _crc;
+constexpr std::array<uint8_t, 256> makeCRCJ1850Table() {
+    std::array<uint8_t, 256> table{};
+    for (int i = 0; i < 256; ++i) {
+        uint8_t crc = static_cast<uint8_t>(i);
+        for (int bit = 0; bit < 8; ++bit) {
+            crc = (crc & 0x80)  ? static_cast<uint8_t>((crc << 1) ^ 0x1D)
+                                : static_cast<uint8_t>(crc << 1);
         }
+        table[i] = crc;
+    }
+    return table;
 }
-uint8_t CalcJ1850CRC(uint8_t * buf, uint8_t len) {
-        const uint8_t * ptr = buf;
-        uint8_t _crc = 0xFF;
 
-        while(len--) _crc = crcJ1850Table[_crc ^ *ptr++];
+constexpr auto crcJ1850Table = makeCRCJ1850Table();
 
-        return ~_crc;
+constexpr uint8_t CalcJ1850CRC(const uint8_t* buf, std::size_t len) {
+    uint8_t crc = 0xFF;
+    for (std::size_t i = 0; i < len; ++i) {
+        crc = crcJ1850Table[crc ^ buf[i]];
+    }
+    return static_cast<uint8_t>(~crc);
 }
 
 bool tutdEnabled = false;
@@ -1659,16 +1666,7 @@ uint32_t timestampclosetonow(uint32_t now, uint32_t WheelTS) {
 
 QueueHandle_t obd2queue;
 void SendOBD2(uint8_t data[], uint16_t length) {
-    _isotpService->Send(data, length);
-}
-
-void OBD2ResponseService1(int PID, uint8_t data[], uint8_t size) {
-    uint8_t *response = (uint8_t *)malloc(size + 2);
-    response[0] = 0x41;
-    response[1] = PID;
-    memcpy(&response[2], data, size);
-    SendOBD2(response, size + 2);
-    free(response);
+    _isotpService.Send(data, length);
 }
 
 void OBD2ResponseService6(int MID, uint8_t data[], uint8_t size) {
@@ -1856,9 +1854,9 @@ void MercedesCanRX001(can_send_callback_t send, const CANData_t data, const uint
     IgnitionOnStartInactive = ((data.Data[0] >> 3) & 0x1);
     IgnitionSwitchState = (IgnitionSwitchState_t)((data.Data[0] >> 0) & 0x7);
     if(IgnitionSwitchState == IgnitionSwitchState_Start) {
-        _digitalService->WritePin(digitalpin_t(23), true);
+        _digitalService.WritePin(digitalpin_t(23), true);
     } else {
-        _digitalService->WritePin(digitalpin_t(23), false);
+        _digitalService.WritePin(digitalpin_t(23), false);
     }
     // ESP_LOGI("MERCEDES", "IgnitionOnStartInactive: %i, IgnitionSwitchState: %i", IgnitionOnStartInactive, IgnitionSwitchState);
 }
@@ -2142,10 +2140,8 @@ class OperationFunction : public AbstractOperation {
 
 float snap = 1337;
 void RegisterCANTasks() {
-    CRCJ1850Init();
-
-    _digitalService->WritePin(digitalpin_t(23), false);
-    _digitalService->InitPin(digitalpin_t(23), Out);
+    _digitalService.WritePin(digitalpin_t(23), false);
+    _digitalService.InitPin(digitalpin_t(23), Out);
 
     xTaskCreate(CANTask100Hz, "CANTask100Hz", 4096, NULL, 10, NULL);
     xTaskCreate(period50Hz, "Period50Hz", 4096, NULL, 10, NULL);
@@ -2154,39 +2150,39 @@ void RegisterCANTasks() {
     xTaskCreate(period4Hz, "Period4Hz", 4096, NULL, 10, NULL);
     xTaskCreate(period1Hz, "Period1Hz", 4096, NULL, 10, NULL);
 
-    _canService->RegisterReceiveCallBack({.CANIdentifier = 0x3D1, .CANBusNumber = 0 }, GMCanRX3D1);
-    _canService->RegisterReceiveCallBack({.CANIdentifier = 0x3E9, .CANBusNumber = 0 }, GMCanRX3E9);
-    _canService->RegisterReceiveCallBack({.CANIdentifier = 0x4C1, .CANBusNumber = 0 }, GMCanRX4C1);
-    _canService->RegisterReceiveCallBack({.CANIdentifier = 0x4C9, .CANBusNumber = 0 }, GMCanRX4C9);
-    _canService->RegisterReceiveCallBack({.CANIdentifier = 0x4D1, .CANBusNumber = 0 }, GMCanRX4D1);
-    _canService->RegisterReceiveCallBack({.CANIdentifier = 0x1A1, .CANBusNumber = 0 }, GMCanRX1A1);
-    _canService->RegisterReceiveCallBack({.CANIdentifier = 0x2C3, .CANBusNumber = 0 }, GMCanRX2C3);
-    _canService->RegisterReceiveCallBack({.CANIdentifier = 0x1F5, .CANBusNumber = 0 }, GMCanRX1F5);
-    _canService->RegisterReceiveCallBack({.CANIdentifier = 0x1ED, .CANBusNumber = 0 }, GMCanRX1ED);
-    _canService->RegisterReceiveCallBack({.CANIdentifier = 0x4F1, .CANBusNumber = 0 }, GMCanRX4F1);
-    _canService->RegisterReceiveCallBack({.CANIdentifier = 0x0F9, .CANBusNumber = 0 }, GMCanRX0F9);
-    _canService->RegisterReceiveCallBack({.CANIdentifier = 0x1C3, .CANBusNumber = 0 }, GMCanRX1C3);
-    _canService->RegisterReceiveCallBack({.CANIdentifier = 0x0C9, .CANBusNumber = 0 }, GMCanRX0C9);
-    _canService->RegisterReceiveCallBack({.CANIdentifier = 0x3F9, .CANBusNumber = 0 }, GMCanRX3F9);
+    _canService.RegisterReceiveCallBack({.CANIdentifier = 0x3D1, .CANBusNumber = 0 }, GMCanRX3D1);
+    _canService.RegisterReceiveCallBack({.CANIdentifier = 0x3E9, .CANBusNumber = 0 }, GMCanRX3E9);
+    _canService.RegisterReceiveCallBack({.CANIdentifier = 0x4C1, .CANBusNumber = 0 }, GMCanRX4C1);
+    _canService.RegisterReceiveCallBack({.CANIdentifier = 0x4C9, .CANBusNumber = 0 }, GMCanRX4C9);
+    _canService.RegisterReceiveCallBack({.CANIdentifier = 0x4D1, .CANBusNumber = 0 }, GMCanRX4D1);
+    _canService.RegisterReceiveCallBack({.CANIdentifier = 0x1A1, .CANBusNumber = 0 }, GMCanRX1A1);
+    _canService.RegisterReceiveCallBack({.CANIdentifier = 0x2C3, .CANBusNumber = 0 }, GMCanRX2C3);
+    _canService.RegisterReceiveCallBack({.CANIdentifier = 0x1F5, .CANBusNumber = 0 }, GMCanRX1F5);
+    _canService.RegisterReceiveCallBack({.CANIdentifier = 0x1ED, .CANBusNumber = 0 }, GMCanRX1ED);
+    _canService.RegisterReceiveCallBack({.CANIdentifier = 0x4F1, .CANBusNumber = 0 }, GMCanRX4F1);
+    _canService.RegisterReceiveCallBack({.CANIdentifier = 0x0F9, .CANBusNumber = 0 }, GMCanRX0F9);
+    _canService.RegisterReceiveCallBack({.CANIdentifier = 0x1C3, .CANBusNumber = 0 }, GMCanRX1C3);
+    _canService.RegisterReceiveCallBack({.CANIdentifier = 0x0C9, .CANBusNumber = 0 }, GMCanRX0C9);
+    _canService.RegisterReceiveCallBack({.CANIdentifier = 0x3F9, .CANBusNumber = 0 }, GMCanRX3F9);
 
-    _canService->RegisterReceiveCallBack({.CANIdentifier = 0x7DF, .CANBusNumber = 1 }, MercedesCanRX7DF);
-    _canService->RegisterReceiveCallBack({.CANIdentifier = 0x7E8, .CANBusNumber = 1 }, MercedesCanRX7E8);
-    _canService->RegisterReceiveCallBack({.CANIdentifier = 0x001, .CANBusNumber = 1 }, MercedesCanRX001);
-    _canService->RegisterReceiveCallBack({.CANIdentifier = 0x003, .CANBusNumber = 1 }, MercedesCanRX003);
-    _canService->RegisterReceiveCallBack({.CANIdentifier = 0x005, .CANBusNumber = 1 }, MercedesCanRX005);
-    _canService->RegisterReceiveCallBack({.CANIdentifier = 0x05F, .CANBusNumber = 1 }, MercedesCanRX05F);
-    _canService->RegisterReceiveCallBack({.CANIdentifier = 0x073, .CANBusNumber = 1 }, MercedesCanRX073);
-    _canService->RegisterReceiveCallBack({.CANIdentifier = 0x06D, .CANBusNumber = 1 }, MercedesCanRX06D);
-    _canService->RegisterReceiveCallBack({.CANIdentifier = 0x045, .CANBusNumber = 1 }, MercedesCanRX045);
-    _canService->RegisterReceiveCallBack({.CANIdentifier = 0x0F9, .CANBusNumber = 1 }, MercedesCanRX0F9);
-    _canService->RegisterReceiveCallBack({.CANIdentifier = 0x245, .CANBusNumber = 1 }, MercedesCanRX245);
-    _canService->RegisterReceiveCallBack({.CANIdentifier = 0x201, .CANBusNumber = 1 },MercedesCanRX201);
-    _canService->RegisterReceiveCallBack({.CANIdentifier = 0x203, .CANBusNumber = 1 },MercedesCanRX203);
-    _canService->RegisterReceiveCallBack({.CANIdentifier = 0x207, .CANBusNumber = 1 },MercedesCanRX207);
-    _canService->RegisterReceiveCallBack({.CANIdentifier = 0x283, .CANBusNumber = 1 },MercedesCanRX283);
-    _canService->RegisterReceiveCallBack({.CANIdentifier = 0x2E5, .CANBusNumber = 1 },MercedesCanRX2E5);
+    _canService.RegisterReceiveCallBack({.CANIdentifier = 0x7DF, .CANBusNumber = 1 }, MercedesCanRX7DF);
+    _canService.RegisterReceiveCallBack({.CANIdentifier = 0x7E8, .CANBusNumber = 1 }, MercedesCanRX7E8);
+    _canService.RegisterReceiveCallBack({.CANIdentifier = 0x001, .CANBusNumber = 1 }, MercedesCanRX001);
+    _canService.RegisterReceiveCallBack({.CANIdentifier = 0x003, .CANBusNumber = 1 }, MercedesCanRX003);
+    _canService.RegisterReceiveCallBack({.CANIdentifier = 0x005, .CANBusNumber = 1 }, MercedesCanRX005);
+    _canService.RegisterReceiveCallBack({.CANIdentifier = 0x05F, .CANBusNumber = 1 }, MercedesCanRX05F);
+    _canService.RegisterReceiveCallBack({.CANIdentifier = 0x073, .CANBusNumber = 1 }, MercedesCanRX073);
+    _canService.RegisterReceiveCallBack({.CANIdentifier = 0x06D, .CANBusNumber = 1 }, MercedesCanRX06D);
+    _canService.RegisterReceiveCallBack({.CANIdentifier = 0x045, .CANBusNumber = 1 }, MercedesCanRX045);
+    _canService.RegisterReceiveCallBack({.CANIdentifier = 0x0F9, .CANBusNumber = 1 }, MercedesCanRX0F9);
+    _canService.RegisterReceiveCallBack({.CANIdentifier = 0x245, .CANBusNumber = 1 }, MercedesCanRX245);
+    _canService.RegisterReceiveCallBack({.CANIdentifier = 0x201, .CANBusNumber = 1 },MercedesCanRX201);
+    _canService.RegisterReceiveCallBack({.CANIdentifier = 0x203, .CANBusNumber = 1 },MercedesCanRX203);
+    _canService.RegisterReceiveCallBack({.CANIdentifier = 0x207, .CANBusNumber = 1 },MercedesCanRX207);
+    _canService.RegisterReceiveCallBack({.CANIdentifier = 0x283, .CANBusNumber = 1 },MercedesCanRX283);
+    _canService.RegisterReceiveCallBack({.CANIdentifier = 0x2E5, .CANBusNumber = 1 },MercedesCanRX2E5);
 
-    _isotpService->RegisterReceiveCallBack(ParseOBD2);
+    _isotpService.RegisterReceiveCallBack(ParseOBD2);
     _obd2PIDHandler.RegisterPID(0x01, new Operation_StaticVariable(static_cast<uint32_t>(0x0007FD00))); //DTC
     _obd2PIDHandler.RegisterPID(0x02, new Operation_StaticVariable(static_cast<uint16_t>(0x0000))); //Freeze Frame DTC
     _obd2PIDHandler.RegisterPID(0x03, new Operation_StaticVariable(static_cast<uint16_t>(0x0202))); //Fuel System Status
